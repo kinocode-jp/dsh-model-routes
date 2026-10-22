@@ -115,3 +115,18 @@ test('候補: 提供元の一覧を用途ごとに分け、日付付き・リア
   const lists = await listMediaModels(target, { apiKey: 'k', fetchImpl: async () => Response.json({ data: ids.map(id => ({ id })) }) })
   assert.deepEqual(lists, { image: ['gpt-image-2', 'chatgpt-image-latest'], tts: ['tts-1', 'gpt-4o-mini-tts'], stt: ['whisper-1', 'gpt-4o-transcribe'], video: ['sora-2'] })
 })
+
+test('動画(Gemini): 転送先へは API キーを送らない', async () => {
+  const target = mediaTarget({ provider: 'google-api', model: 'veo' })
+  const calls = []
+  const fetchImpl = async (url, init = {}) => {
+    calls.push([String(url), init.headers?.['x-goog-api-key'] ?? null])
+    if (String(url).endsWith(':predictLongRunning')) return Response.json({ name: 'operations/1' })
+    if (String(url).endsWith('/operations/1')) return Response.json({ done: true, response: { generateVideoResponse: { generatedSamples: [{ video: { uri: 'https://files.example/v1' } }] } } })
+    if (String(url) === 'https://files.example/v1') return new Response(null, { status: 302, headers: { location: 'https://storage.example/v.mp4' } })
+    return new Response(Uint8Array.from([7, 8]), { status: 200 })
+  }
+  const result = await generateVideo(target, { prompt: 'p' }, { apiKey: 'k', fetchImpl, pollMs: 0 })
+  assert.deepEqual([...result.data], [7, 8])
+  assert.deepEqual(calls.slice(-2), [['https://files.example/v1', 'k'], ['https://storage.example/v.mp4', null]])
+})

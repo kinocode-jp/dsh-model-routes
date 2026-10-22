@@ -82,3 +82,25 @@ test('登録: 設定を変えると付け直し、文字起こしはモデルが
   await registry.dispose()
   assert.deepEqual([[...registered.keys()], providers], [[], []])
 })
+
+test('保存: 同じ秒に作っても上書きせず、番号を付ける', async t => {
+  const dir = await workspace(t)
+  const tools = createMediaTools({ media: () => ({ image: { provider: 'openai-api', model: 'img' } }), credentials: () => credentials, workingDirectory: () => ({ ensure: async () => dir }), fetchImpl: imageFetch, now: () => 'T' })
+  const tool = tools.definitions()[0]
+  const exec = { agent: agentOn('plain', 'm'), signal: new AbortController().signal }
+  const paths = [(await tool.execute({ prompt: 'a' }, exec)).path, (await tool.execute({ prompt: 'b' }, exec)).path]
+  assert.deepEqual(paths, [path.join('generated', 'image-T.png'), path.join('generated', 'image-T-2.png')])
+})
+
+test('文字起こし: 作業フォルダの外のファイルは読まない', async t => {
+  const dir = await workspace(t)
+  const outside = await workspace(t)
+  await fs.writeFile(path.join(outside, 'secret.mp3'), Uint8Array.from([1]))
+  let sent = 0
+  const tools = createMediaTools({ media: () => ({ stt: { provider: 'openai-api', model: 'whisper' } }), credentials: () => credentials, workingDirectory: () => ({ ensure: async () => dir }), fetchImpl: async () => { sent++; return Response.json({ text: 'x' }) } })
+  const tool = tools.definitions()[0]
+  const exec = { agent: agentOn('p', 'm'), signal: new AbortController().signal }
+  await assert.rejects(tool.execute({ path: path.join(outside, 'secret.mp3') }, exec), /作業フォルダの外/)
+  await assert.rejects(tool.execute({ path: path.relative(dir, path.join(outside, 'secret.mp3')) }, exec), /作業フォルダの外/)
+  assert.equal(sent, 0)
+})

@@ -90,8 +90,10 @@ test('ログイン切れ: 更新を拒まれたアカウントに印を付け、
 })
 
 test('一覧: tiered 版がある系統の -low / -medium / -high と、使えないと分かったモデルを外す', () => {
-  const list = ['gemini-3.8-flash-tiered', 'gemini-3.8-flash-low', 'gemini-3.8-flash-high', 'gemini-3.5-flash-extra-low', 'claude-opus-5-5-high', 'gpt-oss-120b-medium'].map(id => ({ id }))
-  assert.deepEqual(usableAgyModels(list, ['gpt-oss-120b-medium']).map(model => model.id), ['gemini-3.8-flash-tiered', 'gemini-3.5-flash-extra-low', 'claude-opus-5-5-high'])
+  const list = ['gemini-3.8-flash-tiered', 'gemini-3.8-flash-low', 'gemini-3.8-flash-high', 'gemini-3.8-flash-extra-low', 'gemini-3.5-flash-extra-low', 'claude-opus-5-5-high', 'gpt-oss-120b-medium'].map(id => ({ id }))
+  assert.deepEqual(usableAgyModels(list, { 'gpt-oss-120b-medium': Date.now() }).map(model => model.id), ['gemini-3.8-flash-tiered', 'gemini-3.5-flash-extra-low', 'claude-opus-5-5-high'])
+  // 1日以上前に覚えたものは忘れる
+  assert.deepEqual(usableAgyModels([{ id: 'a' }], { a: Date.now() - 25 * 3600_000 }).map(model => model.id), ['a'])
 })
 
 test('送信: 404(このアカウントでは使えない)のモデルを覚え、アカウントを切り替えると忘れる', async () => {
@@ -101,7 +103,34 @@ test('送信: 404(このアカウントでは使えない)のモデルを覚え�
     respond: () => new Response('{"error":{"message":"not found"}}', { status: 404 }),
   })
   await assert.rejects(collect(agy.createAdapter(AdapterBase).stream({ provider: AGY_PROVIDER, model: 'claude-opus-5-5-high', messages: [] })), error => error.code === 'INVALID_REQUEST')
-  assert.deepEqual(meta().unusable, ['claude-opus-5-5-high'])
+  assert.deepEqual(Object.keys(meta().unusable), ['claude-opus-5-5-high'])
+  await agy.accounts.resetUnusable()
+  assert.equal(meta().unusable, undefined)
+  await assert.rejects(collect(agy.createAdapter(AdapterBase).stream({ provider: AGY_PROVIDER, model: 'claude-opus-5-5-high', messages: [] })))
   await agy.accounts.switchTo(2)
   assert.equal(meta().unusable, undefined)
+})
+
+test('残量: 同じアカウントなら 5 分間は問い合わせ直さず、全モデルを隠したときはオフを返す', async () => {
+  let asked = 0
+  const { agy } = setup({
+    records: { [agyRecordKey(1)]: account('one') },
+    meta: { active: 1, accounts: [1] },
+    respond: url => {
+      if (!url.includes('fetchAvailableModels')) return new Response('{}', { status: 404 })
+      asked++
+      return Response.json({ models: { 'gemini-3.8-flash-tiered': { displayName: 'G', quotaInfo: { remainingFraction: 0.5 } } } })
+    },
+  })
+  const first = await agy.quota()
+  await agy.quota()
+  assert.equal(first.status, 'ok')
+  const afterList = asked
+  await agy.quota()
+  assert.equal(asked, afterList, '控えを使う')
+  // オフ(全モデル非表示)。控えは別アカウント扱いにならないので、新しい接続で確かめる。
+  const quotaBody = { models: { 'gemini-3.8-flash-tiered': { displayName: 'G', quotaInfo: { remainingFraction: 0.5 } } } }
+  const { agy: offAgy } = setup({ records: { [agyRecordKey(1)]: account('one') }, meta: { active: 1, accounts: [1] }, respond: url => url.includes('fetchAvailableModels') ? Response.json(quotaBody) : new Response('{}', { status: 404 }) })
+  await offAgy.accounts.setEnabled(false)
+  assert.equal((await offAgy.quota()).status, 'off')
 })
