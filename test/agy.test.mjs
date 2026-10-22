@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { AGY_PROVIDER, AgyError, agyRecordKey, createAntigravity, normalizeAgy } from '../lib/agy/index.mjs'
+import { AGY_PROVIDER, AgyError, agyRecordKey, createAntigravity, normalizeAgy, usableAgyModels } from '../lib/agy/index.mjs'
 import { AdapterBase } from '../lib/chains.js'
 
 function fakeCredentials(initial = {}) {
@@ -87,4 +87,21 @@ test('ログイン切れ: 更新を拒まれたアカウントに印を付け、
   await assert.rejects(agy.session(1), error => error.code === 'INVALID_CREDENTIAL')
   assert.equal(credentials.records.get(agyRecordKey(1)).payload.invalid, true)
   assert.deepEqual((await agy.accounts.list()).map(a => [a.signedIn, a.needsLogin]), [[false, true]])
+})
+
+test('一覧: tiered 版がある系統の -low / -medium / -high と、使えないと分かったモデルを外す', () => {
+  const list = ['gemini-3.8-flash-tiered', 'gemini-3.8-flash-low', 'gemini-3.8-flash-high', 'gemini-3.5-flash-extra-low', 'claude-opus-5-5-high', 'gpt-oss-120b-medium'].map(id => ({ id }))
+  assert.deepEqual(usableAgyModels(list, ['gpt-oss-120b-medium']).map(model => model.id), ['gemini-3.8-flash-tiered', 'gemini-3.5-flash-extra-low', 'claude-opus-5-5-high'])
+})
+
+test('送信: 404(このアカウントでは使えない)のモデルを覚え、アカウントを切り替えると忘れる', async () => {
+  const { agy, meta } = setup({
+    records: { [agyRecordKey(1)]: account('one'), [agyRecordKey(2)]: account('two') },
+    meta: { active: 1, accounts: [1, 2] },
+    respond: () => new Response('{"error":{"message":"not found"}}', { status: 404 }),
+  })
+  await assert.rejects(collect(agy.createAdapter(AdapterBase).stream({ provider: AGY_PROVIDER, model: 'claude-opus-5-5-high', messages: [] })), error => error.code === 'INVALID_REQUEST')
+  assert.deepEqual(meta().unusable, ['claude-opus-5-5-high'])
+  await agy.accounts.switchTo(2)
+  assert.equal(meta().unusable, undefined)
 })
