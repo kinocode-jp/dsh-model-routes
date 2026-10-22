@@ -130,3 +130,19 @@ test('動画(Gemini): 転送先へは API キーを送らない', async () => {
   assert.deepEqual([...result.data], [7, 8])
   assert.deepEqual(calls.slice(-2), [['https://files.example/v1', 'k'], ['https://storage.example/v.mp4', null]])
 })
+
+test('動画(Gemini): 同じホスト内の転送ではキーを付け直す', async () => {
+  const target = mediaTarget({ provider: 'google-api', model: 'veo' })
+  const keys = []
+  const fetchImpl = async (url, init = {}) => {
+    url = String(url)
+    if (url.endsWith(':predictLongRunning')) return Response.json({ name: 'operations/1' })
+    if (url.endsWith('/operations/1')) return Response.json({ done: true, response: { generatedVideos: [{ video: { uri: 'https://api.example/files/a' } }] } })
+    keys.push([url, init.headers?.['x-goog-api-key'] ?? null])
+    if (url === 'https://api.example/files/a') return new Response(null, { status: 307, headers: { location: '/files/a:download' } })
+    if (url === 'https://api.example/files/a:download') return new Response(null, { status: 302, headers: { location: 'https://cdn.example/x' } })
+    return new Response(Uint8Array.from([1]), { status: 200 })
+  }
+  await generateVideo(target, { prompt: 'p' }, { apiKey: 'k', fetchImpl, pollMs: 0 })
+  assert.deepEqual(keys, [['https://api.example/files/a', 'k'], ['https://api.example/files/a:download', 'k'], ['https://cdn.example/x', null]])
+})

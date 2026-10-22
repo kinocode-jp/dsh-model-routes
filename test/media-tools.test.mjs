@@ -104,3 +104,16 @@ test('文字起こし: 作業フォルダの外のファイルは読まない', 
   await assert.rejects(tool.execute({ path: path.relative(dir, path.join(outside, 'secret.mp3')) }, exec), /作業フォルダの外/)
   assert.equal(sent, 0)
 })
+
+test('文字起こし: 作業フォルダ内のリンクで外を指しても読まず、「..」で始まる名前は読める', async t => {
+  const dir = await workspace(t)
+  const outside = await workspace(t)
+  await fs.writeFile(path.join(outside, 'secret.mp3'), Uint8Array.from([1]))
+  await fs.symlink(path.join(outside, 'secret.mp3'), path.join(dir, 'link.mp3'))
+  await fs.writeFile(path.join(dir, '..take1.mp3'), Uint8Array.from([2]))
+  const tools = createMediaTools({ media: () => ({ stt: { provider: 'openai-api', model: 'whisper' } }), credentials: () => credentials, workingDirectory: () => ({ ensure: async () => dir }), fetchImpl: async () => Response.json({ text: 'ok' }) })
+  const tool = tools.definitions()[0]
+  const exec = { agent: agentOn('p', 'm'), signal: new AbortController().signal }
+  await assert.rejects(tool.execute({ path: 'link.mp3' }, exec), /作業フォルダの外/)
+  assert.equal((await tool.execute({ path: '..take1.mp3' }, exec)).text, 'ok')
+})

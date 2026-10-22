@@ -111,7 +111,7 @@ test('送信: 404(このアカウントでは使えない)のモデルを覚え�
   assert.equal(meta().unusable, undefined)
 })
 
-test('残量: 同じアカウントなら 5 分間は問い合わせ直さず、全モデルを隠したときはオフを返す', async () => {
+test('残量: 同じアカウントなら 5 分間は問い合わせ直さず、全モデルを隠したときは disabled を返す', async () => {
   let asked = 0
   const { agy } = setup({
     records: { [agyRecordKey(1)]: account('one') },
@@ -132,5 +132,22 @@ test('残量: 同じアカウントなら 5 分間は問い合わせ直さず、
   const quotaBody = { models: { 'gemini-3.8-flash-tiered': { displayName: 'G', quotaInfo: { remainingFraction: 0.5 } } } }
   const { agy: offAgy } = setup({ records: { [agyRecordKey(1)]: account('one') }, meta: { active: 1, accounts: [1] }, respond: url => url.includes('fetchAvailableModels') ? Response.json(quotaBody) : new Response('{}', { status: 404 }) })
   await offAgy.accounts.setEnabled(false)
-  assert.equal((await offAgy.quota()).status, 'off')
+  assert.equal((await offAgy.quota()).status, 'disabled')
+})
+
+test('残量: 失敗も 2 分間は控えを返し(再ログインが必要と分かる)、表示を変えると控えを捨てる', async () => {
+  let asked = 0
+  const { agy } = setup({
+    records: { [agyRecordKey(1)]: account('one', { expires: 0 }) },
+    meta: { active: 1, accounts: [1] },
+    respond: url => { if (url.includes('oauth2.googleapis.com/token')) { asked++; return Response.json({ error: 'invalid_grant' }, { status: 400 }) } return new Response('{}', { status: 404 }) },
+  })
+  const first = await agy.quota()
+  assert.deepEqual([first.status, first.needsLogin], ['error', true])
+  const before = asked
+  await agy.quota()
+  assert.equal(asked, before, '失敗の控えを使う')
+  await agy.accounts.setHidden('gemini-2.5-pro', true)
+  await agy.quota()
+  assert.ok(asked > before, '表示を変えたら問い合わせ直す')
 })
