@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "モデルルート管理 (dsh-model-routes)",
-    "description": "各種 LLM のサブスク（OAuth）と API キーを独立登録し、モデル一覧での表示・非表示を切り替えるプラグイン。"
+    "description": "各種 LLM のサブスク（OAuth）と API キーを登録し、複数アカウント・代替チェーン・Antigravity・用途別モデル（画像・音声・動画）を管理します。"
   },
   "providers": {
     "claude": {

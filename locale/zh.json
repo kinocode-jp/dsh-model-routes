@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "模型路由管理 (dsh-model-routes)",
-    "description": "在 DeepSeek Harness 中独立管理多款 LLM 的订阅（OAuth）与 API 密钥路由，并支持自定义模型显示与隐藏。"
+    "description": "为多种 LLM 登记订阅(OAuth)与 API 密钥,并管理多账号、备用链、Antigravity 以及按用途的模型(图片、语音、视频)。"
   },
   "providers": {
     "claude": {

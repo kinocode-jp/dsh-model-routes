@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Model Routes (dsh-model-routes)",
-    "description": "Manage subscription (OAuth) and API routes for multiple LLMs with customizable visibility in DeepSeek Harness."
+    "description": "Register subscriptions (OAuth) and API keys for many LLMs, with multiple accounts, fallback chains, Antigravity and per-purpose models (image, speech, video)."
   },
   "providers": {
     "claude": {
