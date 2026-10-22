@@ -117,3 +117,19 @@ test('文字起こし: 作業フォルダ内のリンクで外を指しても読
   await assert.rejects(tool.execute({ path: 'link.mp3' }, exec), /作業フォルダの外/)
   assert.equal((await tool.execute({ path: '..take1.mp3' }, exec)).text, 'ok')
 })
+
+test('候補の控え: 変わったキーを使う枠だけ捨て、キーの指定が無ければ全部捨てる', async () => {
+  const { dropMediaCandidates } = await import('../lib/index.js')
+  const cache = new Map([['openai-api', { keyEnv: 'OPENAI_API_KEY' }], ['openai-api-2', { keyEnv: 'OPENAI_API_KEY_2' }], ['google-api', { keyEnv: 'GEMINI_API_KEY' }]])
+  dropMediaCandidates(cache, 'OPENAI_API_KEY_2')
+  assert.deepEqual([...cache.keys()], ['openai-api', 'google-api'])
+  dropMediaCandidates(cache, undefined)
+  assert.equal(cache.size, 0)
+})
+
+test('候補の控え: API キーの通知(reference-updated)でだけ捨て、トークン更新の通知(record-updated)では捨てない', async () => {
+  const source = await fs.readFile(new URL('../lib/index.js', import.meta.url), 'utf8')
+  const handler = name => source.slice(source.indexOf(`ctx.on('${name}'`), source.indexOf('});', source.indexOf(`ctx.on('${name}'`)))
+  assert.match(handler('credentials/reference-updated'), /dropMediaCandidates\(mediaModelCache, ref\)/)
+  assert.doesNotMatch(handler('credentials/record-updated'), /mediaModelCache/)
+})

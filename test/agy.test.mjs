@@ -26,7 +26,7 @@ function setup({ records = {}, meta = {}, respond }) {
 const collect = async iterable => { const out = []; for await (const chunk of iterable) out.push(chunk); return out }
 
 test('設定の検査: 番号・使用中・非表示のモデルを整える', () => {
-  assert.deepEqual(normalizeAgy({ active: 9, accounts: [2, 1, 1, 0], hidden: ['ok-model', '../bad'], shownBeforeOff: ['x'] }), { active: 1, accounts: [1, 2], hidden: ['ok-model'], shownBeforeOff: ['x'] })
+  assert.deepEqual(normalizeAgy({ active: 9, accounts: [2, 1, 1, 0], hidden: ['ok-model', '../bad'], shownBeforeOff: ['x'] }), { active: 1, accounts: [1, 2], hidden: ['ok-model'], shownBeforeOff: ['x'], disabled: true })
   assert.deepEqual(normalizeAgy(null), { active: null, accounts: [], hidden: [] })
 })
 
@@ -65,14 +65,23 @@ test('トークン: 期限が近ければ更新し、資格情報に書き戻す
   assert.equal(credentials.records.get(agyRecordKey(1)).payload.refresh, 'r-one', '更新用トークンは返らなければそのまま')
 })
 
-test('オフ・オン: 全モデルを隠し、オンでオフ前の表示に戻す。アカウントを外すと記録も消す', async () => {
+test('オフ・オン: オフの印で一覧を空にし、オンでオフ前の表示に戻す。オフ中に1つ戻すとそれだけ出す。アカウントを外すと記録も消す', async () => {
   const { agy, credentials, meta } = setup({ records: { [agyRecordKey(1)]: account('one') }, meta: { active: 1, accounts: [1], hidden: ['gemini-2.5-pro'] }, respond: () => new Response('{}', { status: 500 }) })
   const all = (await agy.models.all()).map(model => model.id)
+  const adapter = agy.createAdapter(AdapterBase)
   await agy.accounts.setEnabled(false)
-  assert.deepEqual(new Set(meta().hidden), new Set(all))
+  assert.deepEqual([meta().disabled, meta().hidden, (await adapter.listModels(AGY_PROVIDER)).length], [true, ['gemini-2.5-pro'], 0])
   await agy.accounts.setEnabled(true)
-  assert.deepEqual(meta().hidden, all.includes('gemini-2.5-pro') ? ['gemini-2.5-pro'] : [])
-  assert.deepEqual((await agy.createAdapter(AdapterBase).listModels(AGY_PROVIDER)).every(model => model.provider === AGY_PROVIDER), true)
+  assert.deepEqual([meta().disabled, meta().hidden], [undefined, ['gemini-2.5-pro']])
+  assert.deepEqual((await adapter.listModels(AGY_PROVIDER)).every(model => model.provider === AGY_PROVIDER), true)
+  await agy.accounts.setEnabled(false)
+  await agy.accounts.setHidden(all[0], false)
+  assert.deepEqual([meta().disabled, (await adapter.listModels(AGY_PROVIDER)).map(model => model.id)], [undefined, [all[0]]])
+  // 以前の版のオフ(shownBeforeOff)からもオンに戻せる
+  const legacy = setup({ meta: { active: null, accounts: [], hidden: all, shownBeforeOff: [all[1]] }, respond: () => new Response('{}', { status: 500 }) })
+  assert.equal(legacy.meta().disabled, true)
+  await legacy.agy.accounts.setEnabled(true)
+  assert.deepEqual([legacy.meta().disabled, legacy.meta().hidden.includes(all[1]), legacy.meta().hidden.length], [undefined, false, all.length - 1])
   await agy.accounts.remove(1)
   assert.equal(credentials.records.has(agyRecordKey(1)), false)
   assert.deepEqual([meta().accounts, meta().active], [[], null])
@@ -183,4 +192,19 @@ test('残量: 画面でオフなら、ログインが切れていてもオフと
   })
   assert.equal((await agy.quota()).status, 'disabled')
   assert.equal(asked, 0)
+})
+
+test('残量: スイッチを使わずに全モデルを隠してもオフ。401 は再ログインの印を付ける', async () => {
+  let status = 200
+  const body = { models: { 'gemini-3.8-flash-tiered': { displayName: 'G', quotaInfo: { remainingFraction: 0.5 } } } }
+  const { agy } = setup({
+    records: { [agyRecordKey(1)]: account('one') },
+    meta: { active: 1, accounts: [1], hidden: ['gemini-3.8-flash-tiered'] },
+    respond: url => !url.includes('fetchAvailableModels') ? new Response('{}', { status: 404 }) : status === 200 ? Response.json(body) : new Response('{}', { status }),
+  })
+  assert.equal((await agy.quota()).status, 'disabled')
+  await agy.accounts.setHidden('gemini-3.8-flash-tiered', false)
+  status = 401
+  const relogin = await agy.quota()
+  assert.deepEqual([relogin.status, relogin.needsLogin], ['error', true])
 })
