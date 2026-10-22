@@ -151,3 +151,36 @@ test('残量: 失敗も 2 分間は控えを返し(再ログインが必要と�
   await agy.quota()
   assert.ok(asked > before, '表示を変えたら問い合わせ直す')
 })
+
+test('残量: 1 回の問い合わせで済ませ、全部使えないときはオフと言わず、失敗は日本語で伝える', async () => {
+  let asked = 0
+  let status = 200
+  const { agy } = setup({
+    records: { [agyRecordKey(1)]: account('one') },
+    meta: { active: 1, accounts: [1], unusable: { 'gemini-3.8-flash-tiered': Date.now() } },
+    respond: url => {
+      if (!url.includes('fetchAvailableModels')) return new Response('{}', { status: 404 })
+      asked++
+      return status === 200 ? Response.json({ models: { 'gemini-3.8-flash-tiered': { displayName: 'G', quotaInfo: { remainingFraction: 0.5 } } } }) : new Response('{}', { status })
+    },
+  })
+  const allUnusable = await agy.quota()
+  assert.deepEqual([allUnusable.status, asked], ['error', 1], '使えないモデルだけならエラー(オフではない)、問い合わせは 1 回')
+  await agy.accounts.resetUnusable()
+  status = 429
+  const limited = await agy.quota()
+  assert.equal(limited.status, 'error')
+  assert.match(limited.error, /利用制限/)
+  assert.doesNotMatch(limited.error, /https?:/)
+})
+
+test('残量: 画面でオフなら、ログインが切れていてもオフと返し、問い合わせない', async () => {
+  let asked = 0
+  const { agy } = setup({
+    records: { [agyRecordKey(1)]: account('one', { expires: 0 }) },
+    meta: { active: 1, accounts: [1], hidden: ['x'], shownBeforeOff: [] },
+    respond: () => { asked++; return new Response('{}', { status: 400 }) },
+  })
+  assert.equal((await agy.quota()).status, 'disabled')
+  assert.equal(asked, 0)
+})
