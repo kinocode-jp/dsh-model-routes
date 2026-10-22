@@ -815,6 +815,26 @@ test('Antigravity: 自前の接続処理の状態を出し、切り替え・オ�
   await agyStore.act({ action: 'switch', n: 2 })
   assert.deepEqual(calls.at(-1), ['agyAction', { action: 'switch', n: 2 }])
 })
+test('Antigravity: オフはホストの印で決め、モデル一覧が読めないときもオフと出してスイッチでオンに戻せる', async () => {
+  const { mod } = await loadWith('ja')
+  const { AgyCard, agyStore } = mod.__test
+  const account = { n: 1, email: 'a@example.com', active: true, signedIn: true }
+  const calls = []
+  let state = { accounts: [account], login: null, models: [], disabled: true }
+  agyStore.bind(new Proxy({}, { get: (_, method) => async (...args) => { calls.push([method, ...args]); return ok(state) } }))
+  await agyStore.refresh()
+  let toggle = switches(render(AgyCard()))
+  assert.equal(toggle.length, 1, '一覧が空でもスイッチを出す')
+  assert.equal(toggle[0].props['aria-checked'] ?? toggle[0].props.checked, false)
+  assert.match(textOf(render(AgyCard())), /オフ/)
+  await agyStore.setEnabled(true)
+  assert.deepEqual(calls.at(-1), ['agyAction', { action: 'setEnabled', enabled: true }])
+  // 印が無く、モデルが見えていればオン
+  state = { accounts: [account], login: null, models: [{ id: 'm', name: 'M', hidden: false }] }
+  await agyStore.refresh()
+  toggle = switches(render(AgyCard()))
+  assert.equal(toggle[0].props['aria-checked'] ?? toggle[0].props.checked, true)
+})
 test('モデルルート: 代替チェーンを編集して保存し、アカウントを追加する', async () => {
   const { mod } = await loadWith('ja')
   const { ModelRoutesPage, ChainsTab, AccountsTab, setupStore } = mod.__test

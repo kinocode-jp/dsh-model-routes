@@ -15,12 +15,12 @@ function fakeCredentials(initial = {}) {
 const account = (email, extra = {}) => ({ kind: 'grant', payload: { access: 'a-' + email, refresh: 'r-' + email, expires: Date.now() + 3_600_000, email, projectId: 'p-' + email, ...extra } })
 const sse = text => new Response(`data: ${JSON.stringify({ response: { candidates: [{ content: { parts: [{ text }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 1 } } })}\n\n`, { status: 200, headers: { 'content-type': 'text/event-stream' } })
 
-function setup({ records = {}, meta = {}, respond }) {
+function setup({ records = {}, meta = {}, respond, onSave = () => {} }) {
   const credentials = fakeCredentials(records)
   let saved = normalizeAgy(meta)
   const calls = []
   const fetchImpl = async (url, init = {}) => { calls.push([String(url), init.headers?.authorization]); return respond(String(url), init) }
-  const agy = createAntigravity({ credentials: () => credentials, getMeta: () => saved, saveMeta: async next => { saved = normalizeAgy(next) }, fetchImpl })
+  const agy = createAntigravity({ credentials: () => credentials, getMeta: () => saved, saveMeta: async next => { onSave(); saved = normalizeAgy(next) }, fetchImpl })
   return { agy, credentials, calls, meta: () => saved }
 }
 const collect = async iterable => { const out = []; for await (const chunk of iterable) out.push(chunk); return out }
@@ -219,4 +219,22 @@ test('送信: オフの間は送らず、チェーンが次の候補へ進める
   const { agy } = setup({ records: { [agyRecordKey(1)]: account('one') }, meta: { active: 1, accounts: [1], disabled: true }, respond: () => { sent++; return sse('x') } })
   await assert.rejects(collect(agy.createAdapter(AdapterBase).stream({ provider: AGY_PROVIDER, model: 'gemini-3.8-flash-tiered', messages: [] })), error => error instanceof AgyError && /オフ/.test(error.message))
   assert.equal(sent, 0)
+})
+
+test('オン: モデル一覧(ログイン状態)に頼らず、保存済みの記録だけで戻し、保存は1回', async () => {
+  let saves = 0
+  const make = meta => setup({ meta, respond: () => new Response('{}', { status: 500 }), onSave: () => { saves++ } })
+  // 以前の版のオフ: オフ前に出していた live-only 以外を隠す(仮の一覧には無い ID でも正しく戻る)
+  const legacy = make({ active: null, accounts: [], hidden: ['live-only', 'live-hidden'], shownBeforeOff: ['live-only'] })
+  await legacy.agy.accounts.setEnabled(true)
+  assert.deepEqual([legacy.meta().disabled, legacy.meta().hidden], [undefined, ['live-hidden']])
+  // 手で全部隠していた(印なし)ときにオンにすると、一覧に関係なく全部出す
+  const manual = make({ active: null, accounts: [], hidden: ['live-a', 'live-b'] })
+  await manual.agy.accounts.setEnabled(true)
+  assert.deepEqual(manual.meta().hidden, [])
+  // オフ中に1つ戻すと、保存は1回で、オフ前の表示 + そのモデル
+  const off = make({ active: null, accounts: [], hidden: ['a', 'b'], disabled: true })
+  saves = 0
+  await off.agy.accounts.setHidden('a', false)
+  assert.deepEqual([off.meta().disabled, off.meta().hidden, saves], [undefined, ['b'], 1])
 })
