@@ -48,5 +48,13 @@
   "scripts": {
     "test": "node --check lib/index.js && node --check lib/presets.js && node --check lib/client.js && node --check lib/auth-service.js && node --check lib/auth-messages.js && node --check lib/models-service.js && node --check lib/typert.host.js && node --check lib/chains.js && node --check lib/oauth-accounts.js && node --check lib/agy/index.mjs && node --check lib/media.mjs && node --check lib/media-tools.mjs && node --test test/*.test.mjs",
     "sync-catalog": "node ../dsh-provider-catalog/scripts/sync.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kinocode-jp/dsh-model-routes.git"
+  },
+  "homepage": "https://github.com/kinocode-jp/dsh-model-routes#readme",
+  "bugs": {
+    "url": "https://github.com/kinocode-jp/dsh-model-routes/issues"
   }
 }
