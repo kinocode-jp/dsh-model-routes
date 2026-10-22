@@ -1,0 +1,52 @@
+{
+  "name": "@kinocode/dsh-model-routes",
+  "version": "0.6.0",
+  "description": "DeepSeek Harness 用マルチプロバイダ・モデルルート管理プラグイン。Claude、OpenAI、Gemini 等のサブスク（OAuth）と API キーを独立登録し、モデル一覧での表示・非表示を制御可能にします。",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./typert": "./lib/typert.host.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-models"
+      ],
+      "platform": "web"
+    }
+  },
+  "files": [
+    "lib/**/*.js",
+    "lib/**/*.mjs",
+    "locale/**/*.json",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "lib/agy/vendor/LICENSE.dsh-agy"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "model-routes",
+    "claude",
+    "anthropic",
+    "openai",
+    "gemini"
+  ],
+  "license": "MIT",
+  "author": "kinocode",
+  "scripts": {
+    "test": "node --check lib/index.js && node --check lib/presets.js && node --check lib/client.js && node --check lib/auth-service.js && node --check lib/auth-messages.js && node --check lib/models-service.js && node --check lib/typert.host.js && node --check lib/chains.js && node --check lib/oauth-accounts.js && node --check lib/agy/index.mjs && node --test test/*.test.mjs",
+    "sync-catalog": "node ../dsh-provider-catalog/scripts/sync.mjs"
+  }
+}

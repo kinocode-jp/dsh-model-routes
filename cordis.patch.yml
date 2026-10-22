@@ -1,0 +1,5 @@
+# dsh-model-routes bundle layer.
+# 各種 LLM（Claude, OpenAI, Gemini 等）のサブスク・APIルートおよび表示/非表示を統合管理します。
+- insert:
+    - id: model-routes
+      name: "@kinocode/dsh-model-routes"

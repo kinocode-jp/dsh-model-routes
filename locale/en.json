@@ -1,0 +1,29 @@
+{
+  "meta": {
+    "title": "Model Routes (dsh-model-routes)",
+    "description": "Manage subscription (OAuth) and API routes for multiple LLMs with customizable visibility in DeepSeek Harness."
+  },
+  "providers": {
+    "claude": {
+      "subscription": "Claude (Subscription)",
+      "api": "Claude (API)"
+    },
+    "openai": {
+      "subscription": "OpenAI (Subscription/Codex)",
+      "api": "OpenAI (API)"
+    },
+    "google": {
+      "api": "Gemini (API)"
+    },
+    "xai": {
+      "subscription": "Grok (Subscription/OAuth)",
+      "api": "Grok (API)"
+    },
+    "opencode": {
+      "api": "OpenCode Zen (API)"
+    },
+    "commandcode": {
+      "api": "Command Code (API)"
+    }
+  }
+}

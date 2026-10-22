@@ -1,0 +1,29 @@
+{
+  "meta": {
+    "title": "模型路由管理 (dsh-model-routes)",
+    "description": "在 DeepSeek Harness 中独立管理多款 LLM 的订阅（OAuth）与 API 密钥路由，并支持自定义模型显示与隐藏。"
+  },
+  "providers": {
+    "claude": {
+      "subscription": "Claude (订阅)",
+      "api": "Claude (API)"
+    },
+    "openai": {
+      "subscription": "OpenAI (订阅/Codex)",
+      "api": "OpenAI (API)"
+    },
+    "google": {
+      "api": "Gemini (API)"
+    },
+    "xai": {
+      "subscription": "Grok (订阅/OAuth)",
+      "api": "Grok (API)"
+    },
+    "opencode": {
+      "api": "OpenCode Zen (API)"
+    },
+    "commandcode": {
+      "api": "Command Code (API)"
+    }
+  }
+}
