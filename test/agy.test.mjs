@@ -65,7 +65,7 @@ test('トークン: 期限が近ければ更新し、資格情報に書き戻す
   assert.equal(credentials.records.get(agyRecordKey(1)).payload.refresh, 'r-one', '更新用トークンは返らなければそのまま')
 })
 
-test('オフ・オン: オフの印で一覧を空にし、オンでオフ前の表示に戻す。オフ中に1つ戻すとそれだけ出す。アカウントを外すと記録も消す', async () => {
+test('オフ・オン: オフの印で一覧を空にし、オンでオフ前の表示に戻す。オフ中に1つ戻すとオフ前の表示とそのモデルが出る。アカウントを外すと記録も消す', async () => {
   const { agy, credentials, meta } = setup({ records: { [agyRecordKey(1)]: account('one') }, meta: { active: 1, accounts: [1], hidden: ['gemini-2.5-pro'] }, respond: () => new Response('{}', { status: 500 }) })
   const all = (await agy.models.all()).map(model => model.id)
   const adapter = agy.createAdapter(AdapterBase)
@@ -74,9 +74,14 @@ test('オフ・オン: オフの印で一覧を空にし、オンでオフ前の
   await agy.accounts.setEnabled(true)
   assert.deepEqual([meta().disabled, meta().hidden], [undefined, ['gemini-2.5-pro']])
   assert.deepEqual((await adapter.listModels(AGY_PROVIDER)).every(model => model.provider === AGY_PROVIDER), true)
+  await agy.accounts.setHidden(all[0], true)
   await agy.accounts.setEnabled(false)
   await agy.accounts.setHidden(all[0], false)
-  assert.deepEqual([meta().disabled, (await adapter.listModels(AGY_PROVIDER)).map(model => model.id)], [undefined, [all[0]]])
+  assert.deepEqual([meta().disabled, meta().hidden], [undefined, ['gemini-2.5-pro'].filter(id => id !== all[0])])
+  // スイッチを使わずに全部隠した(カードはオフに見える)ときも、スイッチでオンに戻せる
+  for (const id of all) await agy.accounts.setHidden(id, true)
+  await agy.accounts.setEnabled(true)
+  assert.deepEqual(meta().hidden, [])
   // 以前の版のオフ(shownBeforeOff)からもオンに戻せる
   const legacy = setup({ meta: { active: null, accounts: [], hidden: all, shownBeforeOff: [all[1]] }, respond: () => new Response('{}', { status: 500 }) })
   assert.equal(legacy.meta().disabled, true)
@@ -207,4 +212,11 @@ test('残量: スイッチを使わずに全モデルを隠してもオフ。401
   status = 401
   const relogin = await agy.quota()
   assert.deepEqual([relogin.status, relogin.needsLogin], ['error', true])
+})
+
+test('送信: オフの間は送らず、チェーンが次の候補へ進めるよう失敗として返す', async () => {
+  let sent = 0
+  const { agy } = setup({ records: { [agyRecordKey(1)]: account('one') }, meta: { active: 1, accounts: [1], disabled: true }, respond: () => { sent++; return sse('x') } })
+  await assert.rejects(collect(agy.createAdapter(AdapterBase).stream({ provider: AGY_PROVIDER, model: 'gemini-3.8-flash-tiered', messages: [] })), error => error instanceof AgyError && /オフ/.test(error.message))
+  assert.equal(sent, 0)
 })

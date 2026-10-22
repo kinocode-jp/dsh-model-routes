@@ -381,3 +381,31 @@ test('カスタム枠はキーの有無にかかわらず設定に残す', async
   assert.ok(entry.options.config.providers.ollama)
   assert.ok(entry.options.config.providers.cloud)
 })
+
+test('用途別の候補: API キーの通知(reference-updated)でその枠だけ取り直し、トークン更新(record-updated)では取り直さない', async t => {
+  const { ctx, events, provided } = fakeContext()
+  const credentials = {
+    async describe(ref) { return { configured: ref === 'OPENAI_API_KEY' } },
+    async resolve(ref) { return ref === 'OPENAI_API_KEY' ? { value: 'k' } : undefined },
+    async readRecord() { return undefined }, async modifyRecord() {}, async deleteRecord() {},
+  }
+  ctx.get = name => name === 'credentials' ? credentials : undefined
+  const realFetch = globalThis.fetch
+  let listed = 0
+  globalThis.fetch = async url => { if (String(url).endsWith('/models')) { listed++; return Response.json({ data: [{ id: 'gpt-image-2' }] }) } return new Response('{}', { status: 404 }) }
+  t.after(() => { globalThis.fetch = realFetch })
+  apply(ctx, {})
+  await flush()
+  const setup = provided.modelRoutesSetup
+  assert.deepEqual((await setup.getSetup()).mediaCatalog.image.map(item => item.provider), ['openai-api'])
+  assert.equal(listed, 1)
+  await events['credentials/record-updated']('llm-pi-ai/anthropic')
+  await setup.getSetup()
+  assert.equal(listed, 1, 'トークン更新では控えを使う')
+  await events['credentials/reference-updated']('GEMINI_API_KEY')
+  await setup.getSetup()
+  assert.equal(listed, 1, '別のキーの変更では取り直さない')
+  await events['credentials/reference-updated']('OPENAI_API_KEY')
+  await setup.getSetup()
+  assert.equal(listed, 2, '使っているキーが変わったら取り直す')
+})
