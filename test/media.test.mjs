@@ -117,7 +117,7 @@ test('候補: 提供元の一覧を用途ごとに分け、日付付き・リア
   assert.deepEqual(lists, { image: ['gpt-image-2', 'chatgpt-image-latest'], tts: ['gpt-4o-mini-tts', 'tts-1'], stt: ['gpt-4o-transcribe', 'whisper-1'], video: ['sora-2'] })
 })
 
-test('候補: 新しい順。公開日時(created)があればその順、無ければ版番号の大きい順', async () => {
+test('候補: 新しい順。公開日時(created)があればその順、無ければ系列ごとに版番号の大きい順', async () => {
   const openai = mediaTarget({ provider: 'openai-api', model: '-' })
   const data = [{ id: 'dall-e-3', created: 1698785189 }, { id: 'gpt-image-1', created: 1745517030 }, { id: 'gpt-image-1.5', created: 1765000000 }, { id: 'tts-1', created: 1681940951 }, { id: 'gpt-4o-mini-tts', created: 1742403959 }]
   const lists = await listMediaModels(openai, { apiKey: 'k', fetchImpl: async () => Response.json({ data }) })
@@ -126,7 +126,27 @@ test('候補: 新しい順。公開日時(created)があればその順、無け
   const gemini = mediaTarget({ provider: 'google-api', model: '-' })
   const models = ['imagen-3.0-generate-002', 'gemini-2.5-flash-image', 'imagen-4.0-generate-001', 'gemini-3-pro-image-preview'].map(id => ({ name: 'models/' + id }))
   const google = await listMediaModels(gemini, { apiKey: 'k', fetchImpl: async () => Response.json({ models }) })
-  assert.deepEqual(google.image, ['imagen-4.0-generate-001', 'gemini-3-pro-image-preview', 'imagen-3.0-generate-002', 'gemini-2.5-flash-image'])
+  assert.deepEqual(google.image, ['gemini-3-pro-image-preview', 'gemini-2.5-flash-image', 'imagen-4.0-generate-001', 'imagen-3.0-generate-002'])
+})
+
+test('新しい順: Gemini は系列ごと(Gemini → Imagen)・版の大きい順・同じ版なら基本のモデルが先。日時あり・なし混在、日時が同じ場合も決まった順', async () => {
+  const { newestFirst } = await import('../lib/media.mjs')
+  assert.deepEqual(newestFirst(['imagen-4.0-ultra-generate-001', 'imagen-4.0-fast-generate-001', 'imagen-4.0-generate-001', 'gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview', 'imagen-3.0-generate-002']),
+    ['gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview', 'imagen-4.0-generate-001', 'imagen-4.0-fast-generate-001', 'imagen-4.0-ultra-generate-001', 'imagen-3.0-generate-002'])
+  // Without dates the gpt-image line comes before dall-e.
+  assert.deepEqual(newestFirst(['dall-e-3', 'gpt-image-1', 'gpt-image-1.5', 'dall-e-2']), ['gpt-image-1.5', 'gpt-image-1', 'dall-e-3', 'dall-e-2'])
+  // Dated models first (newest date first; equal dates by version), then the undated ones.
+  const created = new Map([['b', 200], ['a', 100], ['tie-2', 150], ['tie-1', 150]])
+  assert.deepEqual(newestFirst(['gpt-image-9', 'a', 'tie-2', 'b', 'tie-1'], created), ['b', 'tie-2', 'tie-1', 'a', 'gpt-image-9'])
+  // The order does not depend on the input order.
+  const ids = ['imagen-4.0-generate-001', 'gemini-2.5-flash-image', 'imagen-4.0-fast-generate-001', 'gemini-3-pro-image-preview', 'veo-3.0-generate-001']
+  const once = newestFirst(ids)
+  // Every rotation and its reverse: fixed inputs, so a failure can be reproduced.
+  for (let i = 0; i < ids.length; i++) {
+    const rotated = [...ids.slice(i), ...ids.slice(0, i)]
+    assert.deepEqual(newestFirst(rotated), once)
+    assert.deepEqual(newestFirst(rotated.reverse()), once)
+  }
 })
 
 test('動画(Gemini): 転送先へは API キーを送らない', async () => {
@@ -158,4 +178,13 @@ test('動画(Gemini): 同じホスト内の転送ではキーを付け直す', a
   }
   await generateVideo(target, { prompt: 'p' }, { apiKey: 'k', fetchImpl, pollMs: 0 })
   assert.deepEqual(keys, [['https://api.example/files/a', 'k'], ['https://api.example/files/a:download', 'k'], ['https://cdn.example/x', null]])
+})
+
+test('新しい順: 同じ版の Gemini は flash を pro より先にし、続いた変種の語(fast-ultra)も数える', async () => {
+  const { newestFirst } = await import('../lib/media.mjs')
+  assert.deepEqual(newestFirst(['gemini-2.5-pro', 'gemini-2.5-flash']), ['gemini-2.5-flash', 'gemini-2.5-pro'])
+  assert.deepEqual(newestFirst(['gemini-2.5-pro-preview-tts', 'gemini-2.5-flash-preview-tts']), ['gemini-2.5-flash-preview-tts', 'gemini-2.5-pro-preview-tts'])
+  assert.deepEqual(newestFirst(['x-fast-ultra-1', 'x-fast-1', 'x-1']), ['x-1', 'x-fast-1', 'x-fast-ultra-1'])
+  // A flash variant still comes before the same version's pro.
+  assert.deepEqual(newestFirst(['gemini-2.5-pro', 'gemini-2.5-flash-lite', 'gemini-2.5-flash']), ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro'])
 })

@@ -926,3 +926,102 @@ test('用途別: モデルはセレクトで選び(新しい順のまま)、一�
     assert.deepEqual(calls.at(-1), ['reloadMediaModels'])
   } finally { stateImpl = saved }
 })
+
+test('用途別: 一覧に無いサービスはオンにできない(オフはできる)。選んだあとは「モデルを選ぶ」を出さない。読み込めなかったサービスは理由を出す', async () => {
+  const { mod } = await loadWith('ja')
+  const { MediaTab, setupStore } = mod.__test
+  const state = {
+    media: { image: { provider: 'openai-api', model: 'gpt-image-2', enabled: false }, tts: { provider: 'openai-api', model: 'tts-1', enabled: true }, stt: { provider: 'google-api', model: 'gemini-3-flash' } },
+    mediaKinds: ['image', 'stt', 'tts', 'video'],
+    mediaCatalog: { image: [], tts: [], stt: [{ provider: 'google-api', name: 'Gemini', models: [{ id: 'gemini-3-flash', name: 'gemini-3-flash' }] }], video: [] },
+    mediaErrors: { 'xai-api': { name: 'Grok', message: '401' } },
+  }
+  setupStore.service = new Proxy({}, { get: () => async () => ok(state) })
+  setupStore.state = state; setupStore.error = null; setupStore.busy = false
+  const nodes = render(MediaTab({ store: setupStore, translate: mod.__test.t }))
+  const row = kind => render(nodes.find(n => n.props?.['data-mr-media'] === kind))
+  const switchOf = kind => row(kind).find(n => n.props?.role === 'switch')
+  assert.equal(switchOf('image').props.disabled, true, 'not in the list and off: cannot be switched on')
+  assert.equal(switchOf('tts').props.disabled, false, 'not in the list but on: can still be switched off')
+  assert.ok(row('image').some(n => n.props?.['data-mr-media-unlisted'] !== undefined))
+  assert.ok(!row('stt').some(n => n.props?.['data-mr-media-unlisted'] !== undefined))
+  const modelSelect = row('stt').filter(n => n.type === 'select')[1]
+  assert.ok(!render(modelSelect).some(n => n.type === 'option' && n.props.value === ''), 'no empty choice once a model is chosen')
+  assert.match(textOf(nodes), /Grok: モデル一覧を読み込めませんでした\(エラー: 401\)/)
+})
+
+test('用途別: 「モデル一覧を読み込む」の知らせは、読み込めなかったサービスがあるときだけ変える。取得に失敗しただけの枠はオンにできる', async () => {
+  const { mod } = await loadWith('ja')
+  const { MediaTab, setupStore } = mod.__test
+  const base = { media: { image: { provider: 'openai-api', model: 'gpt-image-2', enabled: false } }, mediaKinds: ['image'], mediaCatalog: { image: [] } }
+  let next = { ...base, mediaErrors: {} }
+  setupStore.service = new Proxy({}, { get: () => async () => ok(next) })
+  setupStore.state = { ...base, mediaErrors: { 'openai-api': { name: 'OpenAI', message: '8 秒以内に応答がありませんでした' } } }
+  setupStore.error = null; setupStore.busy = false
+  let nodes = render(MediaTab({ store: setupStore, translate: mod.__test.t }))
+  const sw = nodes.find(n => n.props?.role === 'switch')
+  assert.equal(sw.props.disabled, false, 'a service whose list only failed to load can be switched on')
+  await findButton(nodes, 'モデル一覧を読み込む').props.onClick(); await flush()
+  assert.equal(setupStore.notice, 'モデル一覧を読み込みました')
+  next = { ...base, mediaErrors: { 'openai-api': { name: 'OpenAI', message: '401' } } }
+  nodes = render(MediaTab({ store: setupStore, translate: mod.__test.t }))
+  await findButton(nodes, 'モデル一覧を読み込む').props.onClick(); await flush()
+  assert.match(setupStore.notice, /読み込めなかったサービスがあります/)
+})
+
+test('用途別: 取得の失敗理由は画面の言語で出す(時間切れ・キー未登録・HTTP)。押せないスイッチは理由を名前に含める', async () => {
+  const { mod } = await loadWith('en')
+  const { MediaTab, setupStore } = mod.__test
+  setupStore.state = {
+    media: { image: { provider: 'openai-api', model: 'gpt-image-2', enabled: false }, tts: { provider: 'openai-api', model: 'tts-1', enabled: true } },
+    mediaKinds: ['image', 'tts'], mediaCatalog: { image: [], tts: [] },
+    mediaErrors: {
+      'xai-api': { name: 'Grok', message: 'timeout', code: 'timeout', detail: { seconds: 8 } },
+      'google-api': { name: 'Gemini', message: '「GEMINI_API_KEY」のAPIキーが登録されていません', code: 'missing_credential', detail: { key: 'GEMINI_API_KEY' } },
+      'openai-api-2': { name: 'OpenAI #2', message: '401: bad key', code: 'http', detail: { status: 401, detail: 'bad key' } },
+    },
+  }
+  setupStore.error = null; setupStore.busy = false
+  const nodes = render(MediaTab({ store: setupStore, translate: mod.__test.t }))
+  const errors = render(nodes.find(n => n.props?.['data-mr-media-errors'] !== undefined))
+  assert.equal(errors[0].props.role, undefined, 'a plain list; the notice below announces')
+  const text = textOf(errors)
+  assert.match(text, /Grok: could not load the model list \(no answer within 8 seconds\)/)
+  assert.match(text, /Gemini: could not load the model list \(API key "GEMINI_API_KEY" is not registered\)/)
+  assert.match(text, /OpenAI #2: could not load the model list \(HTTP 401: bad key\)/)
+  const switches = nodes.filter(n => n.props?.role === 'switch')
+  assert.equal(switches[0].props['aria-label'], 'Enable Image generation (This service is not in the current list (no API key registered, or no model for this purpose). It cannot be switched on.)')
+  assert.match(switches[1].props['aria-label'], /Once switched off, it cannot be switched on again/, 'an unlisted purpose that is on says what switching it off means')
+})
+
+test('用途別: 一覧に無いサービスでも、保存済みがオンならオフにした後もスイッチは押せる(オンに戻せる)', async () => {
+  const { mod } = await loadWith('ja')
+  const { MediaTab, setupStore } = mod.__test
+  setupStore.state = { media: { image: { provider: 'openai-api', model: 'gpt-image-2', enabled: true } }, mediaKinds: ['image'], mediaCatalog: { image: [] }, mediaErrors: {} }
+  setupStore.error = null; setupStore.busy = false
+  const saved = stateImpl
+  stateImpl = initial => [initial === null ? { image: { provider: 'openai-api', model: 'gpt-image-2', enabled: false } } : initial, () => {}]
+  try {
+    const nodes = render(MediaTab({ store: setupStore, translate: mod.__test.t }))
+    const sw = nodes.find(n => n.props?.role === 'switch')
+    assert.equal(sw.props['aria-checked'], false)
+    assert.equal(sw.props.disabled, false, 'still operable: switched off in the draft only')
+    assert.equal(nodes.find(n => n.props?.['data-mr-media-unlisted'] !== undefined).props['aria-hidden'], 'true')
+    assert.match(sw.props['aria-label'], /保存するまではオンに戻せます/, 'the name says it can still be switched back on')
+  } finally { stateImpl = saved }
+})
+
+test('代替チェーン: 新しく足した段(モデル未選択)では「モデルを選ぶ」を出す', async () => {
+  const { mod } = await loadWith('ja')
+  const { ChainsTab, setupStore } = mod.__test
+  setupStore.state = {
+    chains: [{ id: 'main', name: 'メイン', steps: [{ provider: 'anthropic', model: '' }], accounts: true }],
+    catalog: [{ provider: 'anthropic', name: 'Claude (OAuth)', models: [{ id: 'claude-opus-5-5', name: 'Claude Opus 5.5' }] }],
+    results: {}, accounts: [], media: {}, mediaKinds: [],
+  }
+  setupStore.busy = false
+  const nodes = render(ChainsTab({ store: setupStore, translate: mod.__test.t }))
+  const modelSelect = nodes.filter(n => n.type === 'select').find(n => n.props['aria-label'] === 'モデルを選ぶ')
+  assert.ok(modelSelect, 'the model select')
+  assert.ok(render(modelSelect).some(n => n.type === 'option' && n.props.value === ''), 'the empty choice is there while no model is chosen')
+})

@@ -126,3 +126,26 @@ test('候補の控え: 変わったキーを使う枠だけ捨て、キーの指
   dropMediaCandidates(cache, undefined)
   assert.equal(cache.size, 0)
 })
+
+test('用途別の候補: API キーが変わった枠だけ世代を進め、ほかの枠の取得中の結果は書き込める', async () => {
+  const { MediaCandidateCache, dropMediaCandidates } = await import('../lib/index.js')
+  const cache = new MediaCandidateCache()
+  cache.set('openai-api', { keyEnv: 'OPENAI_API_KEY', lists: {} })
+  const openai = cache.genOf('openai-api')
+  const gemini = cache.genOf('google-api') // a first fetch still running, nothing cached yet
+  const xai = cache.genOf('xai-api')
+  const fetching = new Map([['google-api', { keyEnv: 'GEMINI_API_KEY' }], ['xai-api', { keyEnv: 'XAI_API_KEY' }]])
+  dropMediaCandidates(cache, 'OPENAI_API_KEY', fetching)
+  assert.notEqual(cache.genOf('openai-api'), openai)
+  assert.equal(cache.has('openai-api'), false)
+  assert.equal(cache.genOf('google-api'), gemini, 'another service keeps its generation')
+  dropMediaCandidates(cache, 'GEMINI_API_KEY', fetching)
+  assert.notEqual(cache.genOf('google-api'), gemini, 'a fetch in progress with the changed key is invalidated too')
+  assert.equal(cache.genOf('xai-api'), xai)
+  // expireAll keeps the lists but makes them stale, and invalidates fetches in progress.
+  cache.set('xai-api', { keyEnv: 'XAI_API_KEY', at: 5, lists: { image: ['grok-image'] } })
+  cache.expireAll()
+  assert.equal(cache.get('xai-api').at, 0)
+  assert.deepEqual(cache.get('xai-api').lists, { image: ['grok-image'] })
+  assert.notEqual(cache.genOf('xai-api'), xai)
+})

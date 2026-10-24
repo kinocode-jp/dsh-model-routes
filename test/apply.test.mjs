@@ -409,3 +409,191 @@ test('用途別の候補: API キーの通知(reference-updated)でその枠だ�
   await setup.getSetup()
   assert.equal(listed, 2, '使っているキーが変わったら取り直す')
 })
+
+// DSH の道具と文字起こしのサービスの代役(ctx.inject で渡す)。登録されている名前を見せる。
+function withMediaServices(ctx) {
+  const tools = new Set()
+  const speech = { registered: 0 }
+  ctx.inject = (names, cb) => {
+    if (names.includes('tools')) cb({ tools: { register(definition) { tools.add(definition.name); return () => tools.delete(definition.name) } }, effect() {} })
+    if (names.includes('speechToText')) cb({ speechToText: { register() { speech.registered++; return () => { speech.registered-- } } }, effect() {} })
+  }
+  return { tools, speech }
+}
+function writeLegacySetup(media) {
+  const dir = path.join(TEST_HOME, 'storages', 'model-routes')
+  fsSync.rmSync(dir, { recursive: true, force: true })
+  fsSync.mkdirSync(dir, { recursive: true })
+  fsSync.writeFileSync(path.join(dir, 'setup.json'), JSON.stringify({ media }))
+}
+
+test('用途別のスイッチ: 保存前からの用途は有効で起動し、オフで道具と文字起こしが外れ、オンで付き直す。enabled の無い保存は保存済みの値を引き継ぐ', async () => {
+  writeLegacySetup({ image: { provider: 'openai-api', model: 'gpt-image-2' }, stt: { provider: 'openai-api', model: 'whisper-1' } })
+  const { ctx, provided } = fakeContext()
+  const { tools, speech } = withMediaServices(ctx)
+  apply(ctx, {})
+  await flush()
+  assert.ok(tools.has('generate_image'), 'saved before the switch existed: on')
+  assert.ok(tools.has('transcribe_audio'))
+  assert.equal(speech.registered, 1)
+  const setup = provided.modelRoutesSetup
+  const image = { provider: 'openai-api', model: 'gpt-image-2' }
+  const stt = { provider: 'openai-api', model: 'whisper-1' }
+  await setup.saveMedia({ media: { image: { ...image, enabled: false }, stt: { ...stt, enabled: false } } })
+  assert.ok(!tools.has('generate_image'), 'off: the tool is gone')
+  assert.ok(!tools.has('transcribe_audio'))
+  assert.equal(speech.registered, 0, 'off: the speech-to-text provider is closed')
+  await setup.saveMedia({ media: { image, stt: { ...stt, enabled: true } } })
+  assert.ok(!tools.has('generate_image'), 'no enabled field: the saved off is kept')
+  assert.equal(speech.registered, 1, 'on again: registered again')
+  await setup.saveMedia({ media: { image: { ...image, enabled: true }, stt: { ...stt, enabled: true }, tts: { provider: 'openai-api', model: 'tts-1' } } })
+  assert.ok(tools.has('generate_image'))
+  assert.ok(!tools.has('text_to_speech'), 'a newly chosen purpose without enabled starts off')
+  await setup.saveMedia({ media: { image: { provider: 'openai-api', model: 'gpt-image-1' }, stt: { ...stt, enabled: true } } })
+  assert.ok(!tools.has('generate_image'), 'a different model without enabled starts off too')
+  fsSync.rmSync(path.join(TEST_HOME, 'storages'), { recursive: true, force: true })
+})
+
+test('用途別の候補: 「モデル一覧を読み込む」は控えを使わずに取り直し、取得の失敗は理由と一緒に返す。取り直しの前に始まった取得は、新しい一覧を上書きしない', async t => {
+  fsSync.rmSync(path.join(TEST_HOME, 'storages'), { recursive: true, force: true })
+  const { ctx, provided, events } = fakeContext()
+  const credentials = {
+    async describe(ref) { return { configured: ref === 'OPENAI_API_KEY' } },
+    async resolve(ref) { return ref === 'OPENAI_API_KEY' ? { value: 'k' } : undefined },
+    async readRecord() { return undefined }, async modifyRecord() {}, async deleteRecord() {},
+  }
+  ctx.get = name => name === 'credentials' ? credentials : undefined
+  const realFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = realFetch })
+  let listed = 0
+  let answer = () => Response.json({ data: [{ id: 'gpt-image-2', created: 2 }] })
+  globalThis.fetch = async url => { if (String(url).endsWith('/models')) { listed++; return answer() } return new Response('{}', { status: 404 }) }
+  apply(ctx, {})
+  await flush()
+  const setup = provided.modelRoutesSetup
+  assert.deepEqual((await setup.getSetup()).mediaCatalog.image[0].models.map(m => m.id), ['gpt-image-2'])
+  await setup.getSetup()
+  assert.equal(listed, 1, 'the cached list is reused')
+  answer = () => Response.json({ data: [{ id: 'gpt-image-3', created: 3 }, { id: 'gpt-image-2', created: 2 }] })
+  const reloaded = await setup.reloadMediaModels()
+  assert.equal(listed, 2, 'reload fetches again')
+  assert.deepEqual(reloaded.mediaCatalog.image[0].models.map(m => m.id), ['gpt-image-3', 'gpt-image-2'])
+  assert.deepEqual(reloaded.mediaErrors, {})
+  // A fetch that started before the reload and fails later must not replace the reloaded list.
+  let releaseOld
+  answer = () => new Promise(resolve => { releaseOld = () => resolve(new Response('{}', { status: 401 })) })
+  await events['credentials/reference-updated']('OPENAI_API_KEY') // drops the cached list without fetching
+  const stale = setup.getSetup()
+  await flush()
+  answer = () => Response.json({ data: [{ id: 'gpt-image-4', created: 4 }] })
+  const fresh = await setup.reloadMediaModels()
+  releaseOld()
+  await stale
+  assert.deepEqual(fresh.mediaCatalog.image[0].models.map(m => m.id), ['gpt-image-4'])
+  assert.deepEqual((await setup.getSetup()).mediaCatalog.image[0].models.map(m => m.id), ['gpt-image-4'], 'the stale failure did not overwrite it')
+  // A failing provider is reported with its reason.
+  answer = () => new Response('{}', { status: 401 })
+  const failed = await setup.reloadMediaModels()
+  assert.ok(failed.mediaErrors['openai-api'], 'reported per service')
+  assert.ok(failed.mediaErrors['openai-api'].message)
+})
+
+test('用途別の候補: 同じ枠の同時取得は1本にまとめ、最初の取得の途中で API キーが変わったら古い結果を書かない。enabled の無い保存はオンも引き継ぐ', async t => {
+  fsSync.rmSync(path.join(TEST_HOME, 'storages'), { recursive: true, force: true })
+  const { ctx, provided, events } = fakeContext()
+  const credentials = {
+    async describe(ref) { return { configured: ref === 'OPENAI_API_KEY' } },
+    async resolve(ref) { return ref === 'OPENAI_API_KEY' ? { value: 'k' } : undefined },
+    async readRecord() { return undefined }, async modifyRecord() {}, async deleteRecord() {},
+  }
+  ctx.get = name => name === 'credentials' ? credentials : undefined
+  const { tools } = withMediaServices(ctx)
+  const realFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = realFetch })
+  let listed = 0
+  let release
+  let answer = () => new Promise(resolve => { release = () => resolve(new Response('{}', { status: 401 })) })
+  globalThis.fetch = async url => { if (String(url).endsWith('/models')) { listed++; return answer() } return new Response('{}', { status: 404 }) }
+  apply(ctx, {})
+  await flush()
+  const setup = provided.modelRoutesSetup
+  // Two screens open at once while the first fetch (with the old key) is still running.
+  const first = setup.getSetup()
+  const second = setup.getSetup()
+  await flush()
+  assert.equal(listed, 1, 'concurrent fetches for the same service share one request')
+  // The key is replaced mid-fetch: the old answer must not be cached.
+  await events['credentials/reference-updated']('OPENAI_API_KEY')
+  answer = () => Response.json({ data: [{ id: 'gpt-image-2', created: 2 }] })
+  release()
+  const [a, b] = await Promise.all([first, second])
+  assert.equal(listed, 2, 'fetched again with the new key, once for both waiting screens')
+  for (const state of [a, b]) {
+    assert.deepEqual(state.mediaCatalog.image[0].models.map(m => m.id), ['gpt-image-2'], 'the waiting screens get the new key\'s list, not the old key\'s failure')
+    assert.deepEqual(state.mediaErrors, {})
+  }
+  const fresh = await setup.getSetup()
+  assert.equal(listed, 2, 'and it is cached')
+  assert.deepEqual(fresh.mediaCatalog.image[0].models.map(m => m.id), ['gpt-image-2'])
+  assert.deepEqual(fresh.mediaErrors, {})
+  // A save without enabled keeps "on" for the same model too.
+  await setup.saveMedia({ media: { image: { provider: 'openai-api', model: 'gpt-image-2', enabled: true } } })
+  assert.ok(tools.has('generate_image'))
+  await setup.saveMedia({ media: { image: { provider: 'openai-api', model: 'gpt-image-2' } } })
+  assert.ok(tools.has('generate_image'), 'kept on')
+  fsSync.rmSync(path.join(TEST_HOME, 'storages'), { recursive: true, force: true })
+})
+
+test('用途別の候補: 取り直しに失敗しても前の一覧を残し、時間切れは目印(timeout)で返す', async t => {
+  fsSync.rmSync(path.join(TEST_HOME, 'storages'), { recursive: true, force: true })
+  const { ctx, provided } = fakeContext()
+  const credentials = {
+    async describe(ref) { return { configured: ref === 'OPENAI_API_KEY' } },
+    async resolve(ref) { return ref === 'OPENAI_API_KEY' ? { value: 'k' } : undefined },
+    async readRecord() { return undefined }, async modifyRecord() {}, async deleteRecord() {},
+  }
+  ctx.get = name => name === 'credentials' ? credentials : undefined
+  const realFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = realFetch })
+  let answer = () => Response.json({ data: [{ id: 'gpt-image-2', created: 2 }] })
+  globalThis.fetch = async url => { if (String(url).endsWith('/models')) return answer(); return new Response('{}', { status: 404 }) }
+  apply(ctx, {})
+  await flush()
+  const setup = provided.modelRoutesSetup
+  assert.deepEqual((await setup.getSetup()).mediaCatalog.image[0].models.map(m => m.id), ['gpt-image-2'])
+  answer = () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError') }
+  const failed = await setup.reloadMediaModels()
+  assert.deepEqual(failed.mediaCatalog.image[0].models.map(m => m.id), ['gpt-image-2'], 'the earlier list stays')
+  assert.equal(failed.mediaErrors['openai-api'].code, 'timeout')
+})
+
+test('用途別の候補: API キーの読み出しが返ってこなくても、時間切れで打ち切って理由を返す', { timeout: 5000 }, async t => {
+  fsSync.rmSync(path.join(TEST_HOME, 'storages'), { recursive: true, force: true })
+  const { ctx, provided } = fakeContext()
+  const credentials = {
+    async describe(ref) { return { configured: ref === 'OPENAI_API_KEY' } },
+    resolve() { return new Promise(() => {}) }, // never answers
+    async readRecord() { return undefined }, async modifyRecord() {}, async deleteRecord() {},
+  }
+  ctx.get = name => name === 'credentials' ? credentials : undefined
+  const realTimeout = AbortSignal.timeout
+  AbortSignal.timeout = () => realTimeout.call(AbortSignal, 50) // the 8 s limit, shortened for the test
+  // AbortSignal.timeout does not keep the process alive by itself (DSH's process does); this test must.
+  const keepAlive = setInterval(() => {}, 20)
+  t.after(() => { AbortSignal.timeout = realTimeout; clearInterval(keepAlive) })
+  apply(ctx, {})
+  await flush()
+  const state = await provided.modelRoutesSetup.getSetup()
+  assert.equal(state.mediaErrors['openai-api'].code, 'timeout')
+})
+
+test('用途別の候補: 失敗理由の目印(mediaListError)', async () => {
+  const { mediaListError } = await import('../lib/index.js')
+  const { MediaError } = await import('../lib/media.mjs')
+  const target = { apiKeyEnv: 'OPENAI_API_KEY' }
+  assert.equal(mediaListError(new DOMException('x', 'TimeoutError'), target).errorCode, 'timeout')
+  assert.deepEqual(mediaListError(new MediaError('MISSING_CREDENTIAL', 'x'), target).errorDetail, { key: 'OPENAI_API_KEY' })
+  assert.deepEqual(mediaListError(new MediaError('HTTP', '403: forbidden'), target).errorDetail, { status: 403, detail: 'forbidden' })
+  assert.equal(mediaListError(new Error('boom'), target).errorCode, 'failed')
+  assert.equal(mediaListError(new TypeError('fetch failed'), target).errorCode, 'network')
+})
