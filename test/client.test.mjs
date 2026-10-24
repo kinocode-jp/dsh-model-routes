@@ -879,3 +879,50 @@ test('代替チェーン: 一覧に無い保存済みの選択(キー未登録�
   assert.match(textOf(nodes), /Claude #2\(一覧に無い\)/)
   assert.match(textOf(nodes), /切り替え: Claude #2 \/ claude-haiku-5-5 MISSING_CREDENTIAL/)
 })
+
+test('用途別: モデルはセレクトで選び(新しい順のまま)、一覧の読み込みボタンと用途ごとのスイッチ(新しく選んだ用途は無効)がある', async () => {
+  const { mod } = await loadWith('ja')
+  const { MediaTab, setupStore } = mod.__test
+  const calls = []
+  const state = {
+    media: { tts: { provider: 'openai-api', model: 'gpt-4o-mini-tts', enabled: true }, video: { provider: 'google-api', model: 'veo-3' } },
+    mediaKinds: ['image', 'stt', 'tts', 'video'],
+    mediaCatalog: {
+      image: [{ provider: 'openai-api', name: 'OpenAI', models: [{ id: 'gpt-image-1.5', name: 'gpt-image-1.5' }, { id: 'gpt-image-1', name: 'gpt-image-1' }] }],
+      tts: [{ provider: 'openai-api', name: 'OpenAI', models: [{ id: 'gpt-4o-mini-tts', name: 'gpt-4o-mini-tts' }, { id: 'tts-1', name: 'tts-1' }] }],
+      stt: [], video: [],
+    },
+    catalog: [{ provider: 'anthropic', name: 'Claude (OAuth)', models: [{ id: 'claude-opus-5-5', name: 'Claude Opus 5.5' }] }],
+  }
+  setupStore.service = new Proxy({}, { get: (_, method) => async (...args) => { calls.push([method, ...args]); return ok(state) } })
+  setupStore.state = state; setupStore.error = null; setupStore.busy = false
+  const drafts = []
+  const saved = stateImpl
+  stateImpl = initial => [initial, value => drafts.push(value)]
+  try {
+    const nodes = render(MediaTab({ store: setupStore, translate: mod.__test.t }))
+    assert.equal(nodes.filter(n => n.type === 'input').length, 0, 'no free-text model field')
+    const row = kind => render(nodes.find(n => n.props?.['data-mr-media'] === kind))
+    // The model select keeps the catalog's newest-first order.
+    const imageSelects = row('image').filter(n => n.type === 'select')
+    assert.equal(imageSelects.length, 2)
+    // A purpose with no models explains how to get some instead of offering chat models.
+    assert.match(textOf(row('stt')), /使えるモデルがありません/)
+    assert.ok(!/Claude/.test(textOf(row('stt'))))
+    // Switches: on for the saved tts, disabled where no model is chosen.
+    const switchOf = kind => row(kind).find(n => n.props?.role === 'switch')
+    assert.equal(switchOf('tts').props['aria-checked'], true)
+    assert.equal(switchOf('image').props['aria-checked'], false)
+    assert.equal(switchOf('image').props.disabled, true)
+    assert.equal(switchOf('video').props['aria-checked'], true, 'saved before the switch existed: shown on, as the host treats it')
+    // Picking a service for a new purpose selects its newest model and leaves the purpose off.
+    imageSelects[0].props.onChange({ target: { value: 'openai-api' } })
+    assert.deepEqual(drafts.at(-1).image, { provider: 'openai-api', model: 'gpt-image-1.5', enabled: false })
+    // Turning tts off keeps its model.
+    switchOf('tts').props.onClick()
+    assert.deepEqual(drafts.at(-1).tts, { provider: 'openai-api', model: 'gpt-4o-mini-tts', enabled: false })
+    // The reload button asks the host to fetch the provider lists again.
+    findButton(nodes, 'モデル一覧を読み込む').props.onClick(); await flush()
+    assert.deepEqual(calls.at(-1), ['reloadMediaModels'])
+  } finally { stateImpl = saved }
+})

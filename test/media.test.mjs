@@ -113,7 +113,20 @@ test('候補: 提供元の一覧を用途ごとに分け、日付付き・リア
   const ids = ['gpt-6.1', 'gpt-image-2', 'gpt-image-2-2026-04-21', 'chatgpt-image-latest', 'tts-1', 'gpt-4o-mini-tts', 'whisper-1', 'gpt-4o-transcribe', 'gpt-4o-transcribe-diarize', 'gpt-realtime-whisper', 'sora-2']
   const target = mediaTarget({ provider: 'openai-api', model: '-' })
   const lists = await listMediaModels(target, { apiKey: 'k', fetchImpl: async () => Response.json({ data: ids.map(id => ({ id })) }) })
-  assert.deepEqual(lists, { image: ['gpt-image-2', 'chatgpt-image-latest'], tts: ['tts-1', 'gpt-4o-mini-tts'], stt: ['whisper-1', 'gpt-4o-transcribe'], video: ['sora-2'] })
+  // Without release dates the larger version comes first; names without a version go last.
+  assert.deepEqual(lists, { image: ['gpt-image-2', 'chatgpt-image-latest'], tts: ['gpt-4o-mini-tts', 'tts-1'], stt: ['gpt-4o-transcribe', 'whisper-1'], video: ['sora-2'] })
+})
+
+test('候補: 新しい順。公開日時(created)があればその順、無ければ版番号の大きい順', async () => {
+  const openai = mediaTarget({ provider: 'openai-api', model: '-' })
+  const data = [{ id: 'dall-e-3', created: 1698785189 }, { id: 'gpt-image-1', created: 1745517030 }, { id: 'gpt-image-1.5', created: 1765000000 }, { id: 'tts-1', created: 1681940951 }, { id: 'gpt-4o-mini-tts', created: 1742403959 }]
+  const lists = await listMediaModels(openai, { apiKey: 'k', fetchImpl: async () => Response.json({ data }) })
+  assert.deepEqual(lists.image, ['gpt-image-1.5', 'gpt-image-1', 'dall-e-3'])
+  assert.deepEqual(lists.tts, ['gpt-4o-mini-tts', 'tts-1'])
+  const gemini = mediaTarget({ provider: 'google-api', model: '-' })
+  const models = ['imagen-3.0-generate-002', 'gemini-2.5-flash-image', 'imagen-4.0-generate-001', 'gemini-3-pro-image-preview'].map(id => ({ name: 'models/' + id }))
+  const google = await listMediaModels(gemini, { apiKey: 'k', fetchImpl: async () => Response.json({ models }) })
+  assert.deepEqual(google.image, ['imagen-4.0-generate-001', 'gemini-3-pro-image-preview', 'imagen-3.0-generate-002', 'gemini-2.5-flash-image'])
 })
 
 test('動画(Gemini): 転送先へは API キーを送らない', async () => {

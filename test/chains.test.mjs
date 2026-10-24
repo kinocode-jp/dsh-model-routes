@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createChainAdapter, expandChain, normalizeAccounts, normalizeChains, normalizeMedia, CHAIN_PROVIDER } from '../lib/chains.js'
+import { createChainAdapter, expandChain, normalizeAccounts, normalizeChains, normalizeMedia, activeMedia, CHAIN_PROVIDER } from '../lib/chains.js'
 
 // DSH の LlmAdapter の代役(stream だけを子クラスが実装する)。
 class FakeAdapter {}
@@ -22,7 +22,20 @@ test('設定の検査: 不正なチェーン・番号・用途を捨てる', () 
   assert.deepEqual(normalizeChains([{ id: 'main', name: ' メイン ', steps: [{ provider: 'anthropic', model: 'claude-opus-5-5' }, { provider: '', model: '' }, { provider: 'Bad Id', model: 'x' }] }, { id: 'main' }, { id: 'BAD' }]),
     [{ id: 'main', name: 'メイン', steps: [{ provider: 'anthropic', model: 'claude-opus-5-5' }], accounts: true }])
   assert.deepEqual(normalizeAccounts({ 'anthropic-api': [3, 2, 2, 1, 10], 'x-api': [2] }, id => id === 'anthropic-api'), { 'anthropic-api': [2, 3] })
-  assert.deepEqual(normalizeMedia({ image: { provider: 'openai-api', model: 'gpt-image-1' }, tts: { provider: '', model: '' }, other: { provider: 'a', model: 'b' } }), { image: { provider: 'openai-api', model: 'gpt-image-1' } })
+  assert.deepEqual(normalizeMedia({ image: { provider: 'openai-api', model: 'gpt-image-1' }, tts: { provider: '', model: '' }, other: { provider: 'a', model: 'b' } }), { image: { provider: 'openai-api', model: 'gpt-image-1', enabled: false } })
+})
+
+test('用途別: 新しく選んだ用途は無効、保存済みで enabled が無いもの(スイッチ導入前)は有効として読む', () => {
+  const picked = { image: { provider: 'openai-api', model: 'gpt-image-2' }, tts: { provider: 'openai-api', model: 'tts-1', enabled: true }, stt: { provider: 'openai-api', model: 'whisper-1', enabled: false } }
+  assert.deepEqual(normalizeMedia(picked), {
+    image: { provider: 'openai-api', model: 'gpt-image-2', enabled: false },
+    tts: { provider: 'openai-api', model: 'tts-1', enabled: true },
+    stt: { provider: 'openai-api', model: 'whisper-1', enabled: false },
+  })
+  assert.equal(normalizeMedia(picked, true).image.enabled, true, 'saved before the switch existed')
+  assert.equal(normalizeMedia(picked, true).stt.enabled, false, 'an explicit choice is kept')
+  assert.deepEqual(activeMedia(normalizeMedia(picked)), { tts: { provider: 'openai-api', model: 'tts-1' } }, 'only enabled purposes reach the tools')
+  assert.deepEqual(activeMedia(undefined), {})
 })
 
 test('試す順番: プライマリ → その別アカウント → セカンダリ → その別アカウント', () => {
