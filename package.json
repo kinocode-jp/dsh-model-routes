@@ -1,6 +1,6 @@
 {
   "name": "@kinocode/dsh-model-routes",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "DeepSeek Harness 用マルチプロバイダ・モデルルート管理プラグイン。Claude、OpenAI、Gemini 等のサブスク（OAuth）と API キーを独立登録し、モデル一覧での表示・非表示を制御可能にします。",
   "type": "module",
   "main": "./lib/index.js",
