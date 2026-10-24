@@ -46,7 +46,7 @@
   "license": "MIT",
   "author": "kinocode",
   "scripts": {
-    "test": "node --check lib/index.js && node --check lib/presets.js && node --check lib/client.js && node --check lib/auth-service.js && node --check lib/auth-messages.js && node --check lib/models-service.js && node --check lib/typert.host.js && node --check lib/chains.js && node --check lib/oauth-accounts.js && node --check lib/agy/index.mjs && node --check lib/media.mjs && node --check lib/media-tools.mjs && node --test test/*.test.mjs",
+    "test": "node --check lib/index.js && node --check lib/presets.js && node --check lib/client.js && node --check lib/auth-service.js && node --check lib/auth-messages.js && node --check lib/models-service.js && node --check lib/typert.host.js && node --check lib/chains.js && node --check lib/oauth-accounts.js && node --check lib/agy/index.mjs && node --check lib/media.mjs && node --check lib/media-tools.mjs && node --check lib/image-limits.js && node --test test/*.test.mjs",
     "sync-catalog": "node ../dsh-provider-catalog/scripts/sync.mjs",
     "prepublishOnly": "npm test"
   },

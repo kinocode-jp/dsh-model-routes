@@ -3,3 +3,14 @@
 - insert:
     - id: model-routes
       name: "@kinocode/dsh-model-routes"
+
+# 画像を取り込むときに、長い辺を 2000px までに縮める(DSH の既定は 8192px で、画素数でしか縮めない)。
+# Claude は 1 回の要求に画像が 20 枚を超えると、1 枚ごとの縦横の上限を下げる(2000〜3000px)。
+# 縦長の全ページのスクリーンショットが上限を超えたまま履歴に残ると、セッションが進めなくなるため、取り込む時点で防ぐ。
+# 縮むのは新しく取り込む画像だけ(既にある画像は image-limits.js の立て直しで扱う)。
+# この指定は attachment-local の config を丸ごと置き換える。プロファイルの cordis.patch.yml で
+# attachment-local の config を書くと、そちらが優先される(その場合は normalizedImageMaxDimension も書く)。
+- id: attachment-local
+  name: "@deepseek-ai/dsh-attachment-local"
+  config:
+    normalizedImageMaxDimension: 2000
