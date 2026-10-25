@@ -88,9 +88,10 @@ test('モデル設定画面のカードに登録する(説明パネルの設定�
   assert.deepEqual(cards.map(c => c.opts.key), ['llm-pi-ai', 'llm-deepseek'], 'pi-ai のカード全てと、DSH 標準の DeepSeek のカードに届くキー')
   for (const card of cards) assert.equal(card.component, mod.__test.ProviderCardExtension)
   const footer = calls.filter(c => c.opts.name === 'settings.models.footer')
-  assert.deepEqual(footer.map(c => c.opts), [{ name: 'settings.models.footer', id: 'model-routes-agy' }], '末尾には Antigravity のカードだけを置く')
-  assert.equal(footer[0].component, mod.__test.AgyCard)
-  assert.equal(calls.length, 4)
+  assert.deepEqual(footer.map(c => c.opts), [{ name: 'settings.models.footer', id: 'model-routes-disabled' }, { name: 'settings.models.footer', id: 'model-routes-agy' }])
+  assert.equal(footer[0].component, mod.__test.DisabledRoutesCards)
+  assert.equal(footer[1].component, mod.__test.AgyCard)
+  assert.equal(calls.length, 5)
 })
 
 test('辞書を ja / en / zh の3言語で locale サービスへ登録する', async () => {
@@ -572,7 +573,7 @@ test('内部通信に繋がらなくても、バッジとカードは登録さ�
   const remote = { $mount: async () => { throw new Error('mount failed') } }
   const warn = console.warn; console.warn = () => {}
   try { await mod.apply({ slots, remote, locale: fakeLocale('ja') }) } finally { console.warn = warn }
-  assert.deepEqual(registered, ['settings.models.provider-card', 'settings.models.provider-card', 'settings.section', 'settings.models.footer'])
+  assert.deepEqual(registered, ['settings.models.provider-card', 'settings.models.provider-card', 'settings.section', 'settings.models.footer', 'settings.models.footer'])
 })
 
 test('内部通信: マウントして modelRoutesAuth と modelRoutesModels に接続し、解除でストアと辞書を外す', async () => {
@@ -796,6 +797,59 @@ test('状態行: 各枠の横にオン・オフを置き、確かめずに切り
   assert.equal(SubscriptionRow({ routeId: 'anthropic' }).type, HideRow)
   // DSH 標準の DeepSeek にはスイッチを出さない
   assert.equal(switches(render(CardStatus({ apiRouteId: 'deepseek-official', keyConfigured: true }))).length, 0)
+})
+
+test('Disabled routes: footer retains only disabled API/custom cards and re-enable removes them', async () => {
+  const { mod } = await loadWith('en')
+  const { DisabledRoutesCards, modelsStore } = mod.__test
+  const groups = [
+    modelGroup({ enabled: false }),
+    modelGroup({ routeId: 'local', service: 'Local', label: 'Local', enabled: false }),
+    modelGroup({ routeId: 'google-api', enabled: true }),
+    modelGroup({ routeId: 'anthropic', kind: 'subscription', enabled: false }),
+  ]
+  modelsStore.state = { groups }
+  modelsStore.busy = false
+  let nodes = render({ type: DisabledRoutesCards, props: {}, children: [] })
+  assert.deepEqual(nodes.filter(n => n.props?.['data-mr-disabled-route']).map(n => n.props['data-mr-disabled-route']), ['anthropic-api', 'local'])
+  assert.match(textOf(nodes), /Enable this route first to edit its API key/)
+  assert.equal(nodes.filter(n => n.type === 'input').length, 0, 'disabled routes never create a secret editor')
+  const calls = []
+  modelsStore.service = { setRouteEnabled: async (routeId, enabled) => {
+    calls.push([routeId, enabled])
+    return ok({ groups: groups.map(group => group.routeId === routeId ? { ...group, enabled } : group) })
+  } }
+  switches(nodes).find(n => n.props['aria-label'] === 'Enable Claude (API)').props.onClick()
+  await flush()
+  assert.deepEqual(calls, [['anthropic-api', true]])
+  nodes = render({ type: DisabledRoutesCards, props: {}, children: [] })
+  assert.deepEqual(nodes.filter(n => n.props?.['data-mr-disabled-route']).map(n => n.props['data-mr-disabled-route']), ['local'])
+  modelsStore.state = null
+  assert.deepEqual(DisabledRoutesCards(), [])
+})
+
+test('Disabled routes: local Edit exposes model controls and partner OAuth login, with localized hints', async () => {
+  for (const lang of ['ja', 'en', 'zh']) {
+    const { mod } = await loadWith(lang)
+    const { DisabledRouteCard, modelsStore, authStore, DICT } = mod.__test
+    const group = modelGroup({ enabled: false })
+    modelsStore.state = { groups: [group, modelGroup({ routeId: 'anthropic', kind: 'subscription', enabled: true })] }
+    authStore.state = stateOf([route()])
+    const saved = stateImpl
+    let nextOpen = false
+    stateImpl = initial => [initial, value => { nextOpen = value }]
+    try { findButton(render(DisabledRouteCard({ group })), DICT[lang]['agy.edit']).props.onClick() } finally { stateImpl = saved }
+    assert.equal(nextOpen, true)
+    stateImpl = initial => [initial === false ? true : initial, () => {}]
+    let nodes
+    try { nodes = render(DisabledRouteCard({ group })) } finally { stateImpl = saved }
+    assert.match(textOf(nodes), new RegExp(DICT[lang]['routes.disabledHint'].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+    assert.ok(nodes.some(n => n.props?.['data-mr-models'] === 'anthropic-api'))
+    assert.ok(nodes.some(n => n.props?.['data-mr-subscription'] === 'anthropic'))
+    assert.ok(findButton(nodes, DICT[lang]['btn.login']))
+    assert.ok(switches(nodes).some(n => n.props['aria-label'].includes('(OAuth)')))
+    assert.equal(nodes.filter(n => n.type === 'input' && n.props.type === 'password').length, 0)
+  }
 })
 
 test('Antigravity: 自前の接続処理の状態を出し、切り替え・オフ・ログインを送る', async () => {
@@ -1024,4 +1078,20 @@ test('代替チェーン: 新しく足した段(モデル未選択)では「モ�
   const modelSelect = nodes.filter(n => n.type === 'select').find(n => n.props['aria-label'] === 'モデルを選ぶ')
   assert.ok(modelSelect, 'the model select')
   assert.ok(render(modelSelect).some(n => n.type === 'option' && n.props.value === ''), 'the empty choice is there while no model is chosen')
+})
+
+test('OAuth: ログイン中は保存先を変える追加・切り替え・削除を無効にする', async () => {
+  const { mod } = await loadWith('ja')
+  const { OauthAccounts, authStore, setupStore, t } = mod.__test
+  setupStore.state = { oauth: [{ routeId: 'anthropic', label: 'Claude', accounts: [{ n: 1, active: true, signedIn: false }, { n: 2, active: false, signedIn: true }] }] }
+  setupStore.busy = false; authStore.busy = false
+  for (const phase of ['running', 'prompt']) {
+    authStore.state = { routes: [], attempt: { id: 'synthetic', routeId: 'anthropic', label: 'Claude', phase, notices: [], prompt: null, error: null } }
+    const nodes = render(OauthAccounts({ store: setupStore, translate: t }))
+    const mapping = buttons(nodes).filter(node => ['アカウントを追加', '使う', '外す'].includes(labelOf(node)))
+    assert.equal(mapping.length, 4)
+    assert.ok(mapping.every(node => node.props.disabled === true))
+  }
+  authStore.state = { routes: [], attempt: null }; setupStore.busy = true
+  assert.equal(findButton(render(OauthAccounts({ store: setupStore, translate: t })), 'ログイン').props.disabled, true)
 })

@@ -29,9 +29,9 @@ Claude  ●                           [編集]
 ```
 
 - **状態行**: 見出しの下に「API キー 登録済み/未登録」と、OAuth のあるサービスは「OAuth ログイン済み/未ログイン/無効」を出します。どちらも使えないときは「モデル一覧に出ない」ことと、登録するかオフにする案内を出します。API キーの状態は DSH がカードに渡す値(`keyConfigured`)、OAuth は DSH の資格情報の記録で判定します。DSH 標準の DeepSeek(`deepseek-official`)の行にも、DSH が渡す API キーの状態で出します。カスタム枠(`customProviders`)はキー不要のものがあるため出しません。
-- **行は1つ**: Claude・OpenAI・Grok は、API 枠の行に OAuth 側をまとめます。OAuth 用の別の行は、カードの中から隠します(DSH の公式スロット `settings.models.provider-card` を使用。状態を読み込めないときは隠しません)。API 枠をオフにしても API の行は残るため(下の「ルート全体の切り替え」)、OAuth の行はいつも API の行にまとめます。Gemini など API だけのサービスは、モデルの表示スイッチだけを足します。ルート全体の有効・無効は、カードの状態行にある各枠のスイッチで切り替えます。
+- **行は1つ**: Claude・OpenAI・Grok は、API 枠の行に OAuth 側をまとめます。OAuth 用の別の行は、カードの中から隠します(DSH の公式スロット `settings.models.provider-card` を使用。状態を読み込めないときは隠しません)。API 枠がオフのときも、画面末尾の復帰用カードに OAuth 欄をまとめます(下の「ルート全体の切り替え」)。Gemini など API だけのサービスは、モデルの表示スイッチだけを足します。ルート全体の有効・無効は、カードの状態行にある各枠のスイッチで切り替えます。
 - **OAuth ログイン**: 「ログイン」で認証ページを開き、表示されたコードを貼ります。ログアウト・再ログイン・取り消しもできます。ログイン処理は DSH の認証サービス(`ctx.authorization`)に任せ、画面とは DSH 内部通信(Typert の `modelRoutesAuth`)でつなぎます。認証コードは記録せず、状態にも出しません。
-- **ルート全体の切り替え**: 各カードの状態行で、枠(API / OAuth)ごとの状態の横にオン・オフのスイッチを置きます(DSH 標準の DeepSeek には出しません)。確認なしで切り替えます。オフにした API 枠・カスタム枠は、設定から消さずに**モデル0件のルート**として残します(表示名・接続先・キー名はそのまま)。そのためカードは消えず、「API キー オフ」と表示したまま、同じスイッチで戻せます。OAuth 枠はカードを持たない(API 枠のカードにまとめる)ため、オフにすると設定から外します。画面の末尾に別の欄は作りません。無効な API 枠のキーを編集する場合は、まず有効にしてから、そのサービスの DSH 標準の編集欄を開きます。ここではキーを入力・削除しません。API / OAuth の認証とモデル選択は変更せず、従来の `modelRoutes.setRouteEnabled` をモデル側の内部通信 `modelRoutesModels.setRouteEnabled(routeId, enabled)` から呼びます。
+- **ルート全体の切り替え**: 各カードの状態行で、枠(API / OAuth)ごとの状態の横にオン・オフのスイッチを置きます(DSH 標準の DeepSeek には出しません)。確認なしで切り替えます。オフにした枠は pi-ai の登録から外し、API 枠・カスタム枠の復帰用カードをモデル画面の末尾に表示します。独自ルートを `models: []` で残すと pi-ai がプロバイダ全体の更新を拒否するためです。復帰用カードでも表示設定と、対になる OAuth のログインを操作できます。キーを編集する場合は、まず有効にしてから DSH 標準の編集欄を開きます。保存済みの認証は削除しません。切り替えは `modelRoutesModels.setRouteEnabled(routeId, enabled)` から既存の `modelRoutes.setRouteEnabled` を呼びます。
 - **モデルの表示**: スイッチをオンにしたモデルだけが、モデル選択の一覧に出ます。保存は `~/.dsh/storages/model-routes/overrides.json` の `models`(設定ファイルは書き換えません)で、押すとすぐ反映します。「既定に戻す」で、そのルートの設定を消します。API 枠は、キー入力欄を残すため、最後の1つは隠せません(OAuth 枠は全部隠せます)。DSH 内部通信は `modelRoutesModels` です。
 - **登録した方だけが一覧に出る**: API だけ・OAuth だけ・両方のどれでも、登録した方式のモデルが出ます。両方なら、2つのグループ(`Claude` と `Claude (OAuth)`)が並び、モデル名の横のバッジ(`API` / `OAuth`)でも区別できます。
 - **ログインが切れたとき**: エラーに `invalid_grant` と出たら、OAuth 欄で「ログアウト」のあと、もう一度ログインします。
@@ -42,8 +42,8 @@ Claude  ●                           [編集]
 ### 更新の反映 / Activation / 更新生效
 
 - **日本語**: 今回はホストの RPC 定義も追加しているため、DSH を再起動し、接続中のブラウザ画面も再読み込みしてください。クライアントだけ更新された場合はルートスイッチを出さず、再起動の案内を表示します。プロバイダの登録方式や資格情報の保存方式は変更しません。
-- **English**: All model controls live in the existing **Models** settings page: a status line (API key / OAuth) and, when editing, OAuth and model visibility in the provider cards; route on/off switches on each card’s status line; a turned-off API or custom route stays as a route with no models, so its card remains and shows “Off”; enable an API route before opening its standard DSH key editor. No duplicate secrets panel or new settings category is added. Usage-bars owns quota display/settings and quota-only keys, not model routes or model API keys. Restart DSH **and reload the browser** after this update because the host RPC manifest changed; a client connected to an older host shows a restart hint instead of route switches.
-- **中文**: 模型相关操作仅在现有的「模型」设置中：提供商卡片显示 API 密钥 / OAuth 状态行，编辑时提供 OAuth 登录和模型显示开关；各卡片状态行上的开关控制 API/OAuth 渠道的启用状态；关闭的 API 渠道和自定义渠道以“无模型的渠道”保留，卡片不会消失，并显示为“已关闭”；编辑 API 密钥前请先启用渠道，再使用 DSH 标准编辑器。不会增加独立设置分类或重复的密钥面板。使用量设置仅负责配额显示及其专用密钥。本次增加了主机 RPC 定义，更新后须**重启 DSH 并重新加载浏览器**；旧主机连接会显示重启提示，而不提供新开关。
+- **English**: All model controls live in the existing **Models** settings page: a status line (API key / OAuth) and, when editing, OAuth and model visibility in the provider cards; route on/off switches on each card’s status line; a turned-off API or custom route is removed from pi-ai and gets a recovery card in the Models footer (empty custom routes invalidate the entire pi-ai update); enable it before opening the standard DSH key editor. Recovery cards retain model controls and partner OAuth sign-in without a duplicate secrets editor. Usage-bars owns quota display/settings and quota-only keys, not model routes or model API keys. Restart DSH **and reload the browser** after this update because the host RPC manifest changed; a client connected to an older host shows a restart hint instead of route switches.
+- **中文**: 模型相关操作仅在现有的「模型」设置中：提供商卡片显示 API 密钥 / OAuth 状态行，编辑时提供 OAuth 登录和模型显示开关；各卡片状态行上的开关控制 API/OAuth 渠道的启用状态；关闭的 API 渠道和自定义渠道从 pi-ai 注册中移除，并在模型页面底部显示恢复卡片（空的自定义渠道会导致整个 pi-ai 更新被拒绝）；恢复卡片保留模型开关和对应的 OAuth 登录；编辑 API 密钥前请先启用渠道，再使用 DSH 标准编辑器。不会增加独立设置分类或重复的密钥面板。使用量设置仅负责配额显示及其专用密钥。本次增加了主机 RPC 定义，更新后须**重启 DSH 并重新加载浏览器**；旧主机连接会显示重启提示，而不提供新开关。
 
 ## 設定「モデルルート」ページ(代替チェーン・アカウント・用途別)
 
@@ -93,7 +93,7 @@ Antigravity(Google Cloud Code Assist の内部 API)を、このプラグイン�
 - **ログイン**: 「編集」→「アカウントを追加(ログイン)」で、この機械の一時的な受け口(`http://localhost:<空いている番号>/oauth-callback`)へ戻る Google のログインページを開きます。ログインすると、メールアドレス・プロジェクト ID を取得して保存します。同じメールで再ログインすると、そのアカウントを更新します。
 - **保存先**: トークンは DSH の資格情報に `model-routes/agy-<番号>` として保存します。使用中の番号・非表示のモデルは `setup.json` の `agy` です。
 - **手動の切り替え**: アカウント一覧の「使う」。**自動の切り替え**: 制限(429)・枠切れ・ログイン切れのとき、本文が出る前なら、ログイン済みの次のアカウントで送り直し、そのアカウントを使用中に残します。要求の誤りなど、アカウントを替えても直らない失敗はそのまま返します。
-- **オフ**: 全モデルを非表示にし、オンでオフ前の表示に戻します。
+- **オフ**: 全モデルを非表示にし、オンでオフ前の表示に戻します。個別モデルとカード全体の ON/OFF はモデル一覧の控えを破棄せず、表示状態と残量表示だけを更新します。通常の期限切れなどで再取得するときも、API の返却順ではなく、系列・版・ID による一定の順序で並べます。
 - **モデル一覧**: ログイン前は、どのアカウントでも出す控えの一覧を出します。ログイン・切り替えの直後に、そのアカウントの実際の一覧へ読み直します。一覧に出ていても、アカウント(プラン)によっては会話に使えないモデルがあります(段階付きの `-low` / `-medium` / `-high` など。サーバーは 404 を返します)。その場合は「このモデルは今のアカウントでは使えません」と返すので、`-tiered` などを選んでください。
 - **ログイン切れ**: トークンの更新を拒まれたアカウントには印を付け、一覧で「再ログインが必要」と出します。同じメールでログインし直すと消えます。
 - **実機での確認**: 2026-10-22 に、Gemini 3.8 Flash(`gemini-3.8-flash-tiered`)で応答を確認しました。わざと壊したアカウントを使用中にして送ると、ログイン切れで次のアカウントへ切り替えて応答し、使用中がそのアカウントに戻ることも確認しました。

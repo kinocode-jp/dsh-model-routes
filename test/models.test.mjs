@@ -37,6 +37,8 @@ test('buildProviderRoute: API 枠は全部隠しても、1つ残してルート�
   const flags = Object.fromEntries(api.models.map(m => [m.id, false]))
   const route = buildProviderRoute('api', api, {}, 'ja', flags)
   assert.equal(route.models.length, 1)
+  const discovered = { ...api, models: [{ id: 'new-only', name: 'New', defaultVisible: false }] }
+  assert.deepEqual(buildProviderRoute('api', discovered).models, [{ id: 'new-only', name: 'New' }], 'newly discovered API-only catalog must keep a valid route without visibility flags')
   const sub = PROVIDER_PRESETS.claude.subscription
   assert.equal(buildProviderRoute('subscription', sub, {}, 'ja', Object.fromEntries(sub.models.map(m => [m.id, false]))), null, 'OAuth 枠は全部隠せば、ルートを作らない')
 })
@@ -177,16 +179,14 @@ test('Models-owned route RPC recovers disabled API/OAuth/custom routes without c
   let state = await service.getModels()
   for (const id of ['anthropic-api', 'anthropic', 'local']) {
     assert.equal(state.groups.find(g => g.routeId === id).enabled, false)
-    // OAuth 枠は外し、API 枠・カスタム枠はカードを残すためモデル0件で残す。どちらも選べるモデルは無い。
-    if (id === 'anthropic') assert.equal(entry.options.config.providers[id], undefined)
-    else assert.deepEqual(entry.options.config.providers[id].models, [], 'disabled route has no fallback catalog or selectable models')
+    assert.equal(entry.options.config.providers[id], undefined, 'disabled routes must not submit invalid empty models to pi-ai')
     state = await service.setRouteEnabled(id, true)
     assert.equal(state.groups.find(g => g.routeId === id).enabled, true)
     assert.ok(entry.options.config.providers[id].models.length > 0)
   }
   await service.setModelVisible('anthropic-api', 'claude-opus-5-5', false)
   state = await service.setRouteEnabled('anthropic-api', false)
-  assert.deepEqual(entry.options.config.providers['anthropic-api'].models, [])
+  assert.equal(entry.options.config.providers['anthropic-api'], undefined)
   state = await service.setRouteEnabled('anthropic-api', true)
   assert.equal(entry.options.config.providers['anthropic-api'].apiKeyEnv, 'ANTHROPIC_API_KEY', 'standard key editor metadata restored')
   assert.ok(!idsOf(entry.options.config.providers['anthropic-api']).includes('claude-opus-5-5'), 'model choice preserved')

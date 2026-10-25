@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { AGY_PROVIDER, AgyError, agyRecordKey, createAntigravity, normalizeAgy, usableAgyModels } from '../lib/agy/index.mjs'
 import { AdapterBase } from '../lib/chains.js'
+import { sortModelsNewestFirst } from '../lib/index.js'
 
 function fakeCredentials(initial = {}) {
   const records = new Map(Object.entries(initial))
@@ -15,12 +16,12 @@ function fakeCredentials(initial = {}) {
 const account = (email, extra = {}) => ({ kind: 'grant', payload: { access: 'a-' + email, refresh: 'r-' + email, expires: Date.now() + 3_600_000, email, projectId: 'p-' + email, ...extra } })
 const sse = text => new Response(`data: ${JSON.stringify({ response: { candidates: [{ content: { parts: [{ text }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 1 } } })}\n\n`, { status: 200, headers: { 'content-type': 'text/event-stream' } })
 
-function setup({ records = {}, meta = {}, respond, onSave = () => {} }) {
+function setup({ records = {}, meta = {}, respond, onSave = () => {}, sort }) {
   const credentials = fakeCredentials(records)
   let saved = normalizeAgy(meta)
   const calls = []
   const fetchImpl = async (url, init = {}) => { calls.push([String(url), init.headers?.authorization]); return respond(String(url), init) }
-  const agy = createAntigravity({ credentials: () => credentials, getMeta: () => saved, saveMeta: async next => { onSave(); saved = normalizeAgy(next) }, fetchImpl })
+  const agy = createAntigravity({ credentials: () => credentials, getMeta: () => saved, saveMeta: async next => { onSave(); saved = normalizeAgy(next) }, fetchImpl, sort })
   return { agy, credentials, calls, meta: () => saved }
 }
 const collect = async iterable => { const out = []; for await (const chunk of iterable) out.push(chunk); return out }
@@ -90,6 +91,66 @@ test('オフ・オン: オフの印で一覧を空にし、オンでオフ前の
   await agy.accounts.remove(1)
   assert.equal(credentials.records.has(agyRecordKey(1)), false)
   assert.deepEqual([meta().accounts, meta().active], [[], null])
+})
+
+test('表示切り替え: モデル一覧の順序と控えを保ち、残量と選択可能モデルだけ更新する', async () => {
+  let asked = 0
+  const ids = ['gemini-3.8-flash-tiered', 'claude-opus-5-5-high', 'gemini-3.5-flash-tiered']
+  const { agy, meta } = setup({
+    records: { [agyRecordKey(1)]: account('one') }, meta: { active: 1, accounts: [1] }, sort: sortModelsNewestFirst,
+    respond: () => {
+      asked++
+      const order = asked % 2 ? ids : [...ids].reverse()
+      return Response.json({ models: Object.fromEntries(order.map(id => [id, { displayName: id, quotaInfo: { remainingFraction: 0.5 } }])) })
+    },
+  })
+  const all = await agy.models.all()
+  assert.deepEqual(all.map(m => m.id), ['claude-opus-5-5-high', 'gemini-3.8-flash-tiered', 'gemini-3.5-flash-tiered'])
+  const cache = agy.models.cache
+  const adapter = agy.createAdapter(AdapterBase)
+  const check = async (action, visible) => {
+    const before = asked
+    await action()
+    assert.strictEqual(await agy.models.all(), all)
+    assert.strictEqual(agy.models.cache, cache)
+    assert.deepEqual((await adapter.listModels()).map(m => m.id), visible)
+    assert.equal(asked, before, 'ON/OFF alone must not refetch the model catalog')
+  }
+  const order = all.map(m => m.id)
+  const hidden = ids[0]
+  await agy.quota()
+  await check(() => agy.accounts.setHidden(hidden, true), order.filter(id => id !== hidden))
+  const beforeQuota = asked
+  assert.ok(!(await agy.quota()).bars.some(bar => bar.model === hidden))
+  assert.equal(asked, beforeQuota + 1, 'visibility changes still invalidate the quota projection')
+  await check(() => agy.accounts.setHidden(hidden, false), order)
+  await check(() => agy.accounts.setEnabled(false), [])
+  assert.equal((await agy.quota()).status, 'disabled')
+  await check(() => agy.accounts.setEnabled(true), order)
+  await check(() => agy.accounts.setHidden(hidden, true), order.filter(id => id !== hidden))
+  await check(() => agy.accounts.setEnabled(false), [])
+  await check(() => agy.accounts.setHidden(hidden, false), order)
+  assert.equal(meta().disabled, undefined, 'showing one model while disabled still enables the route')
+})
+
+test('一覧の更新: API の順序が変わっても並びは固定し、アカウント切り替え時は再取得する', async () => {
+  let asked = 0
+  const ids = ['gemini-3.8-flash-tiered', 'claude-opus-5-5-high', 'gemini-3.5-flash-tiered']
+  const { agy } = setup({
+    records: { [agyRecordKey(1)]: account('one'), [agyRecordKey(2)]: account('two') }, meta: { active: 1, accounts: [1, 2] }, sort: sortModelsNewestFirst,
+    respond: () => {
+      asked++
+      return Response.json({ models: Object.fromEntries((asked % 2 ? ids : [...ids].reverse()).map(id => [id, { displayName: id }])) })
+    },
+  })
+  const first = (await agy.models.all()).map(m => m.id)
+  agy.models.cache.at = 0
+  assert.deepEqual((await agy.models.all()).map(m => m.id), first)
+  assert.equal(asked, 2)
+  await agy.accounts.switchTo(2)
+  assert.equal(agy.models.cache, null)
+  assert.deepEqual((await agy.models.all()).map(m => m.id), first)
+  assert.equal(asked, 3)
 })
 
 test('ログイン切れ: 更新を拒まれたアカウントに印を付け、一覧で「再ログインが必要」と分かるようにする', async () => {

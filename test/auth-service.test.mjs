@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createAuthService } from '../lib/auth-service.js'
+import { activeKey, slotKey, createOauthAccounts } from '../lib/oauth-accounts.js'
 
 const tick = (ms = 0) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -224,6 +225,66 @@ test('メッセージ: ホストの言語(ja/en/zh)でエラーを返し、未�
   await assert.rejects(make('zh').startLogin('anthropic'), /授权服务/)
   await assert.rejects(make('fr').startLogin('anthropic'), /認証サービス/)
   await assert.rejects(make('en').startLogin('nope'), /Unknown subscription route/)
+})
+
+for (const next of ['login', 'switch']) test(`logout deletion serializes with subsequent ${next}`, async () => {
+  const route = 'anthropic', grant = access => ({ kind: 'grant', payload: { access } })
+  let meta = { [route]: { active: 1, accounts: [1, 2], labels: {} } }, auth, release, entered
+  const gate = new Promise(resolve => { release = resolve })
+  const deleting = new Promise(resolve => { entered = resolve })
+  const records = new Map([[activeKey(route), grant('A')], [slotKey(route, 1), grant('A')], [slotKey(route, 2), grant('B')]])
+  let began = false, activeWrites = 0
+  const credentials = {
+    readRecord: async key => records.get(key),
+    describeRecord: async key => ({ configured: records.has(key) }),
+    modifyRecord: async (key, fn) => { if (key === activeKey(route)) activeWrites++; records.set(key, await fn(records.get(key))) },
+    deleteRecord: async key => { entered(); await gate; records.delete(key) },
+  }
+  const oauth = createOauthAccounts({ credentials: () => credentials, get: () => meta, save: async value => { meta = value }, isLoginActive: id => auth.isLoginActive(id) })
+  auth = createAuthService({
+    credentials: () => credentials, targets: () => [{ providerId: 'synthetic', routeId: route, label: 'synthetic' }],
+    withAccountLock: (id, run) => oauth.withRoute(id, run),
+    authorization: () => ({ describe: () => ({ methods: [{ id: 'oauth' }] }), async begin() {
+      began = true; await credentials.modifyRecord(activeKey(route), async () => grant('new-login')); return { status: 'authorized' }
+    } }),
+  })
+  const loggingOut = auth.logout(route)
+  await deleting
+  const following = next === 'login' ? auth.startLogin(route) : oauth.switchTo(route, 2)
+  await tick()
+  assert.equal(began, false); assert.equal(activeWrites, 0)
+  release(); await Promise.all([loggingOut, following]); await tick()
+  assert.equal(records.get(activeKey(route)).payload.access, next === 'login' ? 'new-login' : 'B')
+  assert.equal(meta[route].active, next === 'login' ? 1 : 2)
+})
+
+test('logout respects rejection from the account coordinator before deleting credentials', async () => {
+  let deletes = 0
+  const auth = createAuthService({
+    credentials: () => ({ deleteRecord: async () => { deletes++ } }),
+    targets: () => [{ routeId: 'anthropic', label: 'synthetic' }],
+    withAccountLock: async () => { throw new Error('route quarantined') },
+  })
+  await assert.rejects(auth.logout('anthropic'), /route quarantined/)
+  assert.equal(deletes, 0)
+})
+
+test('認証開始の同期例外でもルートの所有権を解放する', async () => {
+  const service = createAuthService({
+    credentials: () => ({}), targets: () => [{ routeId: 'anthropic', label: 'synthetic' }],
+    authorization: () => ({ describe: () => ({ methods: [{ id: 'oauth' }] }), begin() { throw new Error('synthetic start failure') } }),
+  })
+  await assert.rejects(service.startLogin('anthropic'), /synthetic start failure/)
+  assert.equal(service.isLoginActive('anthropic'), false)
+  assert.equal((await service.getAttempt()).phase, 'error')
+  await assert.rejects(service.startLogin('anthropic'), /synthetic start failure/)
+})
+
+test('認証失敗でもルートの所有権を解放する', async () => {
+  const { service } = fakeEnv({ flow: async () => { throw new Error('synthetic failure') } })
+  await service.startLogin('anthropic'); await tick()
+  assert.equal(service.isLoginActive('anthropic'), false)
+  assert.equal((await service.getAttempt()).phase, 'error')
 })
 
 test('メッセージ: 3言語の辞書は同じキーと置換語を持つ', async () => {

@@ -36,10 +36,9 @@ test('設定どおりに購読/APIルートを登録する', async () => {
   assert.deepEqual(Object.keys(updates[0]), ['config'], 'Entry.update には新しい config だけを渡す')
   const providers = entry.options.config.providers
   assert.deepEqual(providers.anthropic.models.map(m => m.id), ['claude-sonnet-5-5'])
-  // オフの API 枠はモデル0件のルートとして残す(設定画面のカードを残し、オフのまま表示するため)
-  assert.deepEqual(providers['anthropic-api'].models, [])
-  assert.equal(providers['anthropic-api'].apiKeyEnv, 'ANTHROPIC_API_KEY', 'キー名は残す')
-  assert.deepEqual(providers['commandcode-api'].models, [])
+  // pi-ai が拒否するモデル0件の独自ルートを作らない。復帰用カードはクライアントが担当する。
+  assert.equal(providers['anthropic-api'], undefined)
+  assert.equal(providers['commandcode-api'], undefined)
   assert.ok(providers['openai-codex'])
   assert.ok(providers['google-api'])
   assert.equal(providers.existing.displayName, 'Existing')
@@ -118,7 +117,7 @@ test('カスタムプロバイダも画面から切り替えられる', async t 
   const state = await provided.modelRoutes.setRouteEnabled('local', 'api', false)
   assert.equal(state.routes.local.api.enabled, false)
   assert.equal(state.routes.local.label, 'Local')
-  assert.deepEqual(entry.options.config.providers.local.models, [], 'カードを残すため、モデル0件で残す')
+  assert.equal(entry.options.config.providers.local, undefined, '無効な独自ルートは登録しない')
   await assert.rejects(provided.modelRoutes.setRouteEnabled('local', 'subscription', true), /api/)
   const saved = JSON.parse(await fs.readFile(path.join(dir, 'storages', 'model-routes', 'overrides.json'), 'utf8'))
   assert.deepEqual(saved.customProviders.local, { enabled: false })
@@ -165,7 +164,7 @@ test('プロファイルの include 配下にある llm-pi-ai を見つける', 
   await flush()
   assert.equal(updates.length, 1)
   assert.ok(entry.options.config.providers['openai-codex'])
-  assert.deepEqual(entry.options.config.providers['commandcode-api'].models, [])
+  assert.equal(entry.options.config.providers['commandcode-api'], undefined)
 })
 
 test('所有ルートを手動で書き換えたら検出し、以後上書きしない', async () => {
@@ -585,6 +584,33 @@ test('用途別の候補: API キーの読み出しが返ってこなくても�
   await flush()
   const state = await provided.modelRoutesSetup.getSetup()
   assert.equal(state.mediaErrors['openai-api'].code, 'timeout')
+})
+
+test('disabled API routes never invalidate the entire live pi-ai provider set', async () => {
+  fsSync.rmSync(path.join(TEST_HOME, 'storages'), { recursive: true, force: true })
+  const { ctx, entry, provided } = fakeContext()
+  let liveProviders = {}
+  const rejected = []
+  entry.update = async options => {
+    entry.options = { ...entry.options, ...options }
+    // Loader retains raw options but keeps the old running config when pi-ai rejects a route.
+    const invalid = Object.entries(options.config.providers).find(([id, route]) => id !== 'existing' && !route.models?.length)
+    if (invalid) { rejected.push(invalid[0]); return }
+    liveProviders = options.config.providers
+  }
+  apply(ctx, { providers: { google: { api: { enabled: false } }, opencode: { api: { enabled: false } } }, customProviders: { local: { enabled: false, models: [{ id: 'local-model' }] } } })
+  await flush()
+  assert.deepEqual(rejected, [])
+  assert.ok(liveProviders['openai-api'])
+  assert.ok(liveProviders['anthropic-api'])
+  for (const id of ['google-api', 'opencode', 'local']) assert.equal(liveProviders[id], undefined)
+  assert.equal((await provided.modelRoutesModels.getModels()).groups.find(g => g.routeId === 'google-api').enabled, false)
+  await provided.modelRoutesModels.setRouteEnabled('google-api', true)
+  assert.ok(liveProviders['google-api'].models.length)
+  await provided.modelRoutesModels.setRouteEnabled('google-api', false)
+  assert.equal(liveProviders['google-api'], undefined)
+  assert.ok(liveProviders['openai-api'])
+  assert.deepEqual(rejected, [])
 })
 
 test('用途別の候補: 失敗理由の目印(mediaListError)', async () => {
